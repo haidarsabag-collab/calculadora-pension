@@ -1044,7 +1044,50 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
         }
       }
 
-      doc.save(`PENSION_${monthName.toUpperCase()}_${yr}.pdf`);
+      // --- HYBRID PDF MERGER (pdf-lib) PARA ADJUNTAR ARCHIVOS PDF ---
+      let finalPdfBytes = doc.output('arraybuffer');
+      try {
+        if (window.PDFLib) {
+          const { PDFDocument } = window.PDFLib;
+          const mainPdf = await PDFDocument.load(finalPdfBytes);
+          let hasPdfAttachments = false;
+
+          const mergePdfAttachment = async (base64) => {
+            if (!base64 || !base64.includes('application/pdf')) return;
+            try {
+              const raw = base64.split(',')[1];
+              const binaryString = window.atob(raw);
+              const len = binaryString.length;
+              const bytes = new Uint8Array(len);
+              for (let i = 0; i < len; i++) bytes[i] = binaryString.charCodeAt(i);
+
+              const attachmentDoc = await PDFDocument.load(bytes.buffer);
+              const copiedPages = await mainPdf.copyPages(attachmentDoc, attachmentDoc.getPageIndices());
+              copiedPages.forEach((page) => mainPdf.addPage(page));
+              hasPdfAttachments = true;
+            } catch (err) {
+              console.error("Error fusionando PDF anexo:", err);
+            }
+          };
+
+          if (meta?.cepData) await mergePdfAttachment(meta.cepData);
+          if (meta?.ticketsData) {
+            for (const t of meta.ticketsData) {
+              await mergePdfAttachment(t.data);
+            }
+          }
+
+          if (hasPdfAttachments) {
+            finalPdfBytes = await mainPdf.save();
+          }
+        }
+      } catch (e) {
+        console.error("Fallo fusión de PDF (falló pdf-lib), descargando versión base", e);
+      }
+
+      const blob = new Blob([finalPdfBytes], { type: 'application/pdf' });
+      triggerDownload(URL.createObjectURL(blob), `PENSION_${monthName.toUpperCase()}_${yr}.pdf`);
+
       notify('✓ Reporte generado con anexos incluidos');
     } catch (e) { notify('Error generando PDF: ' + e.message, 'error'); }
   };
