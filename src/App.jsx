@@ -744,17 +744,14 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
       } else {
         list.push(impactData);
       }
-
-      const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list) };
+      // Auto-recalcular monto total desde los movimientos
+      const newTotal = parseFloat(viewingHistorical.baseUsed || 5408) +
+        list.filter(x => !x.isMetadata).reduce((s, x) => s + (x.monthlyImpact || 0), 0);
+      const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list), amount: Math.round(newTotal * 100) / 100 };
       setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
-
-      supabase.from('history').update({ expenses: JSON.stringify(list) }).eq('id', viewingHistorical.id).then(({ error }) => {
-        if (error) notify("Offline: Guardado en Historial", "error");
-      });
-
-      notify("Gasto histórico actualizado");
+      supabase.from('history').upsert(updatedHist);
+      notify(`Guardado \u2022 Nuevo total: ${fmt(newTotal)}`);
       resetForm();
-      downloadTicketIfNew(impactData);
       return;
     }
 
@@ -839,10 +836,32 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
     }
   };
 
-  const copyReport = () => {
-    navigator.clipboard.writeText(aiReport).then(() => notify('✓ Resumen copiado al portapapeles'));
-  };
+  const generatePDF = () => {
+    try {
+      const { jsPDF } = window.jspdf;
+      if (!jsPDF) { notify('Librería PDF cargando, intenta en 5 segundos', 'error'); return; }
+      const doc = new jsPDF();
+      const monthName = meses[viewingHistorical ? viewingHistorical.month : month];
+      const yr = viewingHistorical ? viewingHistorical.year : year;
+      const reportText = aiReport || generatedNarrative;
+      const total = viewingHistorical ? viewingHistorical.amount : totalFinal;
 
+      doc.setFontSize(16); doc.setTextColor(26, 115, 232);
+      doc.text(`ESTADO DE CUENTA - PENSÓN ALIMENTICIA`, 20, 20);
+      doc.setFontSize(11); doc.setTextColor(100);
+      doc.text(`${monthName} ${yr}`, 20, 30);
+      doc.setFontSize(9); doc.setTextColor(0);
+      doc.setFont('courier', 'normal');
+      const lines = doc.splitTextToSize(reportText, 170);
+      doc.text(lines, 20, 44);
+      const yFinal = Math.min(44 + lines.length * 4.5, 265);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(26, 115, 232);
+      doc.text(`TOTAL DEPOSITADO: ${fmt(total)}`, 20, yFinal + 10);
+
+      doc.save(`PENSION_${monthName}_${yr}.pdf`);
+      notify('✓ PDF generado y descargado');
+    } catch (e) { notify('Error generando PDF: ' + e.message, 'error'); }
+  };
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#202124] font-sans pb-20 selection:bg-blue-100">
@@ -1194,11 +1213,14 @@ Escribe el resumen en español, con el desglose de cada concepto y el total fina
                       }} className="p-2 bg-blue-50 text-blue-500 rounded-full shadow-sm hover:bg-blue-100 transition-colors"><Pencil className="w-4 h-4" /></button>
                       <button onClick={async () => {
                         if (viewingHistorical && isEditingHistorical) {
-                          let list = JSON.parse(viewingHistorical.expenses || "[]").filter(x => x.id !== aj.id);
-                          const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list) };
+                          const list = JSON.parse(viewingHistorical.expenses || "[]").filter(x => x.id !== aj.id);
+                          // Auto-recalcular monto total
+                          const newTotal = parseFloat(viewingHistorical.baseUsed || 5408) +
+                            list.filter(x => !x.isMetadata).reduce((s, x) => s + (x.monthlyImpact || 0), 0);
+                          const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list), amount: Math.round(newTotal * 100) / 100 };
                           setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
-                          supabase.from('history').update({ expenses: JSON.stringify(list) }).eq('id', viewingHistorical.id);
-                          notify("Eliminado del historial");
+                          supabase.from('history').upsert(updatedHist);
+                          notify(`Eliminado • Nuevo total: ${fmt(newTotal)}`);
                         } else {
                           setExpenses(e => e.filter(x => x.id !== aj.id));
                           supabase.from('expenses').delete().eq('id', aj.id).then(({ error }) => {
@@ -1231,8 +1253,8 @@ Escribe el resumen en español, con el desglose de cada concepto y el total fina
               <CheckCircle2 className="w-6 h-6" /> {viewingHistorical ? "Guardar Cambios" : "Finalizar Periodo"}
             </button>
           ) : <div />}
-          <button onClick={copyReport} className={`w-full flex items-center justify-center gap-3 py-5 bg-[#1A73E8] text-white rounded-3xl font-black text-xs uppercase shadow-xl hover:bg-blue-700 transition-all ${viewingHistorical && !isEditingHistorical ? 'col-span-1 sm:col-span-2' : ''}`}>
-            <Download className="w-5 h-5" /> Copiar Resumen al Portapapeles
+          <button onClick={generatePDF} className={`w-full flex items-center justify-center gap-3 py-5 bg-[#1A73E8] text-white rounded-3xl font-black text-xs uppercase shadow-xl hover:bg-blue-700 transition-all ${viewingHistorical && !isEditingHistorical ? 'col-span-1 sm:col-span-2' : ''}`}>
+            <Printer className="w-5 h-5" /> {viewingHistorical ? 'Generar PDF del Mes' : 'Generar Reporte PDF'}
           </button>
         </div>
 
@@ -1247,9 +1269,8 @@ Escribe el resumen en español, con el desglose de cada concepto y el total fina
           </button>
         </div>
 
-        {/* Acciones del mes: CEP + Ticket Scan */}
+        {/* Acciones del mes: CEP + Ticket Scan (disponible siempre) */}
         <div className="flex gap-3 px-2 mt-4">
-          {/* Adjuntar / Ver CEP - disponible siempre */}
           <button onClick={() => cepInputRef.current.click()}
             className={`flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${(viewingHistorical?.cepData || cepData)
               ? 'bg-green-50 text-green-700 border-green-300'
@@ -1258,13 +1279,11 @@ Escribe el resumen en español, con el desglose de cada concepto y el total fina
             <Paperclip className="w-4 h-4" />
             {(viewingHistorical?.cepData || cepData) ? 'CEP Adjunto ✓' : 'Adjuntar CEP'}
           </button>
-          {/* Scan ticket - solo al agregar gastos */}
-          {(!viewingHistorical || isEditingHistorical) && (
-            <button onClick={() => galleryInputRef.current.click()}
-              className="flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all bg-white text-slate-400 border-slate-200 shadow-sm hover:bg-slate-50">
-              <ImageIcon className="w-4 h-4" /> Escanear Ticket
-            </button>
-          )}
+          {/* Ticket scan - disponible siempre incluyendo máses históricos */}
+          <button onClick={() => galleryInputRef.current.click()}
+            className="flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all bg-white text-slate-400 border-slate-200 shadow-sm hover:bg-slate-50">
+            <ImageIcon className="w-4 h-4" /> Escanear Ticket
+          </button>
         </div>
         {/* Previsualización del CEP adjunto */}
         {(viewingHistorical?.cepData || cepData) && (
