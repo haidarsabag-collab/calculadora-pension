@@ -9,8 +9,12 @@ import {
 import { supabase } from './supabaseClient';
 
 // --- CONFIGURACIÓN TÉCNICA ---
-const LOCAL_API_KEY_STORAGE = "pension_hadi_gemini_key";
-const APP_STORAGE_KEY = "pension_hadi_offline_data_v31";
+const STORAGE = {
+  GEMINI: "pension_hadi_gemini_key",
+  GROQ: "pension_hadi_groq_key",
+  OPENROUTER: "pension_hadi_openrouter_key",
+  DATA: "pension_hadi_offline_data_v31"
+};
 
 const meses = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"];
 
@@ -35,11 +39,16 @@ const App = () => {
   const [expenses, setExpenses] = useState([]);
   const [history, setHistory] = useState([]);
   const [manualBase, setManualBase] = useState(5408);
-  const [userApiKey, setUserApiKey] = useState(() => localStorage.getItem(LOCAL_API_KEY_STORAGE) || "");
+  const [keys, setKeys] = useState({
+    gemini: localStorage.getItem(STORAGE.GEMINI) || "",
+    groq: localStorage.getItem(STORAGE.GROQ) || "",
+    openrouter: localStorage.getItem(STORAGE.OPENROUTER) || ""
+  });
   const [showConfig, setShowConfig] = useState(false);
 
   // UI States
   const [showHistory, setShowHistory] = useState(false);
+  const [showAnnualSummary, setShowAnnualSummary] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [aiReport, setAiReport] = useState("");
   const [isEditingHistorical, setIsEditingHistorical] = useState(false);
@@ -47,9 +56,14 @@ const App = () => {
   const [editingId, setEditingId] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [libsReady, setLibsReady] = useState(false);
+  const [pendingMetadata, setPendingMetadata] = useState(null);
+  const [tempTotalManual, setTempTotalManual] = useState("");
 
   const galleryInputRef = useRef();
   const cepInputRef = useRef();
+  const pdfAnalysisInputRef = useRef();
+  const manualPdfRef = useRef();
+  const manualTicketsRef = useRef();
   const textareaRef = useRef(null);
   const formRef = useRef(null);
 
@@ -67,17 +81,20 @@ const App = () => {
   // --- SINCRONIZACIÓN HÍBRIDA (SUPABASE + LOCALSTORAGE) ---
   const loadSupabaseData = async () => {
     try {
-      const { data: expData } = await supabase.from('expenses').select('*');
+      const { data: expData, error: expError } = await supabase.from('expenses').select('*');
+      if (expError) throw expError;
       if (expData) setExpenses(expData);
 
-      const { data: histData } = await supabase.from('history').select('*').order('timestamp', { ascending: false });
+      const { data: histData, error: histError } = await supabase.from('history').select('*').order('timestamp', { ascending: false });
+      if (histError) throw histError;
       if (histData) setHistory(histData);
 
-      const { data: confData } = await supabase.from('config').select('base_manual').single();
-      if (confData && confData.base_manual) setManualBase(confData.base_manual);
+      // maybeSingle: no lanza error si la tabla config está vacía
+      const { data: confData } = await supabase.from('config').select('base_manual').maybeSingle();
+      if (confData?.base_manual) setManualBase(confData.base_manual);
 
-      if (expData && histData && confData) {
-        localStorage.setItem(APP_STORAGE_KEY, JSON.stringify({ expenses: expData, history: histData, manualBase: confData.base_manual }));
+      if (expData && histData) {
+        localStorage.setItem(STORAGE.DATA, JSON.stringify({ expenses: expData, history: histData, manualBase: confData?.base_manual || 5408 }));
       }
     } catch (error) {
       console.error("Supabase Offline", error);
@@ -90,14 +107,30 @@ const App = () => {
       try {
         await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
         await loadScript('https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js');
+        // PDF.js para lectura/extracción de texto de PDFs
+        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.mjs');
+        if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.mjs';
         setLibsReady(true);
 
-        const saved = localStorage.getItem(APP_STORAGE_KEY);
+        const savedV25 = localStorage.getItem("pension_hadi_offline_data_v25");
+        const saved = localStorage.getItem(STORAGE.DATA);
+
         if (saved) {
-          const data = JSON.parse(saved);
-          if (data.expenses) setExpenses(data.expenses);
-          if (data.history) setHistory(data.history);
-          if (data.manualBase) setManualBase(data.manualBase);
+          try {
+            const data = JSON.parse(saved);
+            if (Array.isArray(data.expenses)) setExpenses(data.expenses);
+            if (Array.isArray(data.history)) setHistory(data.history);
+            if (data.manualBase) setManualBase(data.manualBase);
+          } catch (e) { console.error("Error legacy data", e); }
+        } else if (savedV25) {
+          try {
+            const data25 = JSON.parse(savedV25);
+            if (Array.isArray(data25.expenses)) setExpenses(data25.expenses);
+            if (Array.isArray(data25.history)) setHistory(data25.history);
+            if (data25.manualBase) setManualBase(data25.manualBase);
+            localStorage.setItem(STORAGE.DATA, savedV25);
+            notify("¡Historial anterior recuperado!", "success");
+          } catch (e) { console.error("Error migration", e); }
         }
 
         await loadSupabaseData();
@@ -108,20 +141,22 @@ const App = () => {
 
   useEffect(() => {
     try {
-      localStorage.setItem(APP_STORAGE_KEY, JSON.stringify({ expenses, history, manualBase }));
+      localStorage.setItem(STORAGE.DATA, JSON.stringify({ expenses, history, manualBase }));
     } catch (e) {
       if (e.name === 'QuotaExceededError') notify("Cache lleno. Limpia el historial.", "error");
     }
   }, [expenses, history, manualBase, notify]);
 
   // --- LÓGICA DE CÁLCULOS ---
-  const viewingHistorical = useMemo(() => history.find(h => h.month === month && h.year === year) || null, [history, month, year]);
+  const viewingHistorical = useMemo(() => {
+    return (history || []).find(h => h && h.month === month && h.year === year) || null;
+  }, [history, month, year]);
 
   const currentBase = useMemo(() => {
     if (viewingHistorical) return Number(viewingHistorical.baseUsed) || 5408;
     const diffYears = year - 2026;
     const baseCalculada = diffYears > 0 ? manualBase * Math.pow(1.04, diffYears) : manualBase;
-    return Math.round(baseCalculada * 100) / 100;
+    return Math.max(0, Math.round(baseCalculada * 100) / 100);
   }, [year, viewingHistorical, manualBase]);
 
   const calculateImpact = (ex) => {
@@ -138,34 +173,78 @@ const App = () => {
   const activeAjustes = useMemo(() => {
     let list = [];
     if (viewingHistorical) {
-      try { list = JSON.parse(viewingHistorical.expenses) || []; } catch { list = []; }
-      return list.filter(x => !x.isMetadata);
+      try {
+        const parsed = JSON.parse(viewingHistorical.expenses);
+        list = Array.isArray(parsed) ? parsed : [];
+      } catch { list = []; }
+      list = (list || []).filter(x => x && !x.isMetadata);
     } else {
-      list = expenses.map(ex => calculateImpact(ex)).filter(r => r.monthlyImpact !== 0);
+      list = (expenses || []).map(ex => calculateImpact(ex)).filter(r => r && r.monthlyImpact !== 0);
     }
 
-    if ((month === 5 || month === 11) && !list.some(x => x.isRopaVirtual)) {
+    if ((month === 5 || month === 11) && (list && !list.some(x => x && x.isRopaVirtual))) {
       list.unshift({
         name: "CUOTA DE ROPA (ESTACIONAL)", monthlyImpact: 1500, originalAmount: 1500,
         paidBy: "SISTEMA", isRopaVirtual: true, date: `${year}-${String(month + 1).padStart(2, '0')}-01`, id: 'ropa-v', responsibility: 'shared'
       });
     }
-    return list;
+    return list || [];
   }, [expenses, viewingHistorical, month, year]);
 
   const totalFinal = useMemo(() => {
-    const ajustesTotal = activeAjustes.reduce((acc, curr) => acc + (curr.monthlyImpact || 0), 0);
-    return Math.ceil((currentBase + ajustesTotal) * 100) / 100;
-  }, [currentBase, activeAjustes]);
+    if (viewingHistorical && !isEditingHistorical) return Number(viewingHistorical.amount) || 0;
+    if (!viewingHistorical && tempTotalManual !== "") return Number(tempTotalManual) || 0;
+    const ajustesTotal = (activeAjustes || []).reduce((acc, curr) => acc + (curr.monthlyImpact || 0), 0);
+    const finalVal = Math.ceil((currentBase + ajustesTotal) * 100) / 100;
+    return isNaN(finalVal) ? 0 : finalVal;
+  }, [currentBase, activeAjustes, viewingHistorical, isEditingHistorical, tempTotalManual]);
+
+  const handleAttachment = async (e, type) => {
+    const files = Array.from(e.target.files);
+    if (!files.length) return;
+    notify(`Procesando adjunto/s...`);
+
+    let list = viewingHistorical ? JSON.parse(viewingHistorical.expenses || "[]") : [...activeAjustes];
+    let metaIdx = list.findIndex(x => x.isMetadata);
+    let metaObj = metaIdx >= 0 ? list[metaIdx] : { ...(pendingMetadata || {}), isMetadata: true };
+
+    for (const file of files) {
+      const b64 = await new Promise((res, rej) => {
+        const r = new FileReader(); r.onloadend = () => res(r.result); r.onerror = rej; r.readAsDataURL(file);
+      });
+
+      if (type === 'tickets') {
+        metaObj.ticketsData = metaObj.ticketsData || [];
+        metaObj.ticketsData.push({ name: file.name, data: b64, type: file.type });
+      } else if (type === 'pdf') {
+        metaObj.pdfData = b64;
+      } else if (type === 'cep') {
+        metaObj.cepData = b64;
+        setCepAttached(b64);
+      }
+    }
+
+    if (viewingHistorical) {
+      if (metaIdx >= 0) list[metaIdx] = metaObj; else list.unshift(metaObj);
+      const updated = { ...viewingHistorical, expenses: JSON.stringify(list) };
+      setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updated : h));
+      supabase.from('history').update({ expenses: JSON.stringify(list) }).eq('id', viewingHistorical.id);
+    } else {
+      setPendingMetadata(metaObj);
+    }
+    notify(`✓ Archivo(s) guardado(s) correctamente`);
+    if (e.target) e.target.value = "";
+  };
 
   // --- GENERADOR DE NARRATIVA QUIRÚRGICA ---
   const generatedNarrative = useMemo(() => {
     if (viewingHistorical && !isEditingHistorical) return viewingHistorical.aiReport || "";
 
-    const suman = activeAjustes.filter(a => a.monthlyImpact > 0);
-    const restan = activeAjustes.filter(a => a.monthlyImpact < 0);
+    const list = activeAjustes || [];
+    const suman = list.filter(a => a && a.monthlyImpact > 0);
+    const restan = list.filter(a => a && a.monthlyImpact < 0);
 
-    let text = `ESTADO DE CUENTA - PENSIÓN ${meses[month]} ${year}\n`;
+    let text = `ESTADO DE CUENTA - PENSIÓN ${meses[month] || "MES"} ${year}\n`;
     text += `==================================================\n\n`;
 
     text += `(+) BASE MENSUAL FIJA: ${fmt(currentBase)}\n\n`;
@@ -205,89 +284,253 @@ const App = () => {
     return text;
   }, [currentBase, activeAjustes, viewingHistorical, isEditingHistorical, totalFinal, month, year]);
 
+  useEffect(() => {
+    if (viewingHistorical) {
+      setAiReport(viewingHistorical.aiReport || "");
+      setTempTotalManual("");
+      setCepAttached(null);
+    } else {
+      setAiReport("");
+      setTempTotalManual("");
+      setCepAttached(null);
+    }
+  }, [month, year, viewingHistorical]);
+
   useEffect(() => { setAiReport(generatedNarrative); }, [generatedNarrative]);
 
-  // --- MOTOR DE ESCANEO REFORZADO (SOLUCIÓN 401) ---
+  // --- MOTOR DE IA UNIVERSAL TRI-FASE ---
+  const callAiFailover = async ({ prompt, imageBase64, mimeType }) => {
+    const configs = [
+      {
+        provider: 'GEMINI',
+        key: keys.gemini,
+        models: ['gemini-1.5-flash', 'gemini-1.5-pro'],
+        call: async (key, model) => {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+          const res = await fetch(url, {
+            method: 'POST',
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }, ...(imageBase64 ? [{ inlineData: { mimeType, data: imageBase64 } }] : [])] }],
+              generationConfig: { responseMimeType: "application/json" }
+            })
+          });
+          const json = await res.json();
+          return json.candidates?.[0]?.content?.parts?.[0]?.text;
+        }
+      },
+      {
+        provider: 'GROQ',
+        key: keys.groq,
+        models: ['llama-3.2-11b-vision-preview', 'llama-3.3-70b-versatile'],
+        call: async (key, model) => {
+          const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model,
+              messages: [{
+                role: "user", content: [
+                  { type: "text", text: prompt },
+                  ...(imageBase64 ? [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] : [])
+                ]
+              }],
+              response_format: { type: "json_object" }
+            })
+          });
+          const json = await res.json();
+          return json.choices?.[0]?.message?.content;
+        }
+      },
+      {
+        provider: 'OPENROUTER',
+        key: keys.openrouter,
+        models: ['google/gemini-flash-1.5', 'meta-llama/llama-3.2-11b-vision-instruct:free'],
+        call: async (key, model) => {
+          const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model,
+              messages: [{
+                role: "user", content: [
+                  { type: "text", text: prompt },
+                  ...(imageBase64 ? [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] : [])
+                ]
+              }]
+            })
+          });
+          const json = await res.json();
+          return json.choices?.[0]?.message?.content;
+        }
+      }
+    ];
+
+    for (const config of configs) {
+      if (!config.key) continue;
+      for (const model of config.models) {
+        try {
+          console.log(`Intentando ${config.provider} con ${model}...`);
+          const result = await config.call(config.key, model);
+          if (result) return { text: result, model: `${config.provider} (${model})` };
+        } catch (e) {
+          console.warn(`Falló ${model}:`, e);
+        }
+      }
+    }
+    throw new Error("Todos los motores de IA fallaron o falta configuración.");
+  };
+
   const handleImageScan = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    if (!userApiKey || userApiKey.trim() === '') {
-      notify("Configura primero tu llave (API Key) de Gemini para poder escanear.", "error");
-      setShowConfig(true);
-      return;
-    }
-
     setIsScanning(true);
 
     const reader = new FileReader();
     reader.onloadend = async () => {
       const base64Data = reader.result.split(',')[1];
       const mimeType = file.type || "image/jpeg";
-      const promptText = "Analiza este ticket de gasto. Extrae concepto corto (max 3 palabras) y monto total. Responde exclusivamente con un objeto JSON plano: {\"name\": \"...\", \"amount\": 00.00}";
+      const prompt = "Analiza este ticket. Responde SOLO JSON plano: {\"name\": \"...\", \"amount\": 00.00}";
 
-      const models = ['gemini-2.5-flash-preview-09-2025', 'gemini-2.5-flash-image-preview', 'gemini-1.5-flash'];
-
-      const fetchWithRetry = async (retryCount = 0, modelIndex = 0) => {
-        try {
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/${models[modelIndex]}:generateContent?key=${userApiKey}`;
-          const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{
-                role: "user",
-                parts: [
-                  { text: promptText },
-                  { inlineData: { mimeType, data: base64Data } }
-                ]
-              }],
-              generationConfig: { responseMimeType: "application/json" }
-            })
-          });
-
-          if (!response.ok) {
-            const errText = await response.text();
-            if (response.status !== 401 && modelIndex < models.length - 1) {
-              console.warn(`Failover a: ${models[modelIndex + 1]}`);
-              return fetchWithRetry(0, modelIndex + 1);
-            }
-            throw new Error(`API ${response.status}: ${errText}`);
-          }
-
-          const result = await response.json();
-          const aiText = result.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!aiText) {
-            if (modelIndex < models.length - 1) return fetchWithRetry(0, modelIndex + 1);
-            throw new Error("Respuesta vacía");
-          }
-
-          const parsed = JSON.parse(aiText);
-
-          setNewEx(prev => ({
-            ...prev,
-            name: String(parsed.name || "").toUpperCase(),
-            amount: String(parsed.amount || ""),
-            imageData: reader.result
-          }));
-
-          notify(`Nota escaneada vía ${models[modelIndex]}`);
-          setIsScanning(false);
-        } catch (err) {
-          if (retryCount < 3 && !err.message.includes('401')) {
-            const delays = [1000, 3000, 6000];
-            setTimeout(() => fetchWithRetry(retryCount + 1, modelIndex), delays[retryCount]);
-          } else {
-            console.error("Scan Failed:", err);
-            notify("Fallo en motor IA. Captura manual requerida.", "error");
-            setIsScanning(false);
-          }
-        }
-      };
-
-      fetchWithRetry();
+      try {
+        const { text, model } = await callAiFailover({ prompt, imageBase64: base64Data, mimeType });
+        const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+        setNewEx(prev => ({ ...prev, name: String(parsed.name || "").toUpperCase(), amount: String(parsed.amount || ""), imageData: reader.result }));
+        notify(`Escaneado vía ${model}`);
+      } catch (err) {
+        notify("Cámara/IA falló. Captura manual.", "error");
+      } finally {
+        setIsScanning(false);
+      }
     };
     reader.readAsDataURL(file);
+  };
+
+  const generateSmartNarrative = async () => {
+    if (!keys.gemini && !keys.groq && !keys.openrouter) {
+      notify("Configura al menos una llave de IA para redacción mágica", "error");
+      setShowConfig(true);
+      return;
+    }
+    setIsScanning(true);
+    const dataContext = `Base: ${fmt(currentBase)}. Mes: ${meses[month]}. Total a pagar: ${fmt(totalFinal)}. Gastos: ${JSON.stringify(activeAjustes)}.`;
+    const prompt = `Actúa como un asistente financiero experto. Redacta un mensaje de WhatsApp/Reporte para la madre sobre la pensión. Sé cordial, transparente y muy detallado en el desglose basándote en: ${dataContext}. Responde SOLO en JSON plano: {"report": "texto del reporte..."}`;
+
+    try {
+      const { text, model } = await callAiFailover({ prompt });
+      const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
+      setAiReport(parsed.report);
+      notify(`Reporte redactado por ${model}`);
+    } catch (e) {
+      notify("Error en redacción automática", "error");
+    } finally {
+      setIsScanning(false);
+    }
+  };
+
+  // --- ANALIZADOR DE PDF HISTÓRICO CON IA (V4 - SERVER FIRST) ---
+  const analyzePdfForHistory = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const isDocPdf = file.type === 'application/pdf';
+
+    if (!keys.gemini && !keys.groq && !keys.openrouter) {
+      notify("Configura al menos una llave de IA en ⚙️", "error");
+      setShowConfig(true);
+      if (pdfAnalysisInputRef.current) pdfAnalysisInputRef.current.value = "";
+      return;
+    }
+    if (isDocPdf && !keys.gemini) {
+      notify("Para PDFs necesitas la llave de Gemini (otros motores solo procesan imágenes)", "error");
+      setShowConfig(true);
+      if (pdfAnalysisInputRef.current) pdfAnalysisInputRef.current.value = "";
+      return;
+    }
+
+    setIsScanning(true);
+    try {
+      let prompt, imageBase64 = null, mimeType = file.type;
+
+      if (isDocPdf) {
+        notify("Analizando PDF localmente...");
+        const arrayBuffer = await file.arrayBuffer();
+        let docText = '';
+        try {
+          if (window.pdfjsLib) {
+            const pdf = await window.pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+            for (let i = 1; i <= pdf.numPages; i++) {
+              const page = await pdf.getPage(i);
+              const textContent = await page.getTextContent();
+              docText += textContent.items.map(s => s.str).join(' ') + '\n';
+            }
+          }
+        } catch (e) { console.error('Error parseando PDF localmente:', e); }
+
+        if (docText.trim().length > 20) {
+          // PDF con texto: cualquier IA lo puede procesar
+          const textPrompt = `Eres un asistente financiero de pensión alimenticia. Analiza el siguiente texto extraído de un reporte de pensión y extrae TODOS los movimientos financieros.\n\nTEXTO DEL REPORTE:\n${docText}\n\nDevuelve EXCLUSIVAMENTE este JSON sin texto adicional:\n{"base":5408.00,"totalFinal":5408.00,"aiReport":"Resumen del mes","expenses":[{"name":"CONCEPTO MAYUSCULAS","amount":100.00,"paidBy":"haidar","responsibility":"shared","installments":1}]}\nResponsabilidad: shared=50/50, kenny=solo kenny, haidar=haidar pagó por kenny, por_pagar=depósito directo.`;
+          const { text: aiText, model } = await callAiFailover({ prompt: textPrompt });
+          const jsonMatch = aiText.replace(/```json|```/gi, '').match(/\{[\s\S]*\}/);
+          if (!jsonMatch) throw new Error(`Sin JSON: ${aiText.substring(0, 150)}`);
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (!Array.isArray(parsed.expenses) || !parsed.expenses.length) throw new Error('No se encontraron movimientos');
+          const ts = Date.now();
+          const newExpenses = parsed.expenses.map((ex, i) => ({ ...calculateImpact({ ...ex, id: `ai-${ts}-${i}` }), id: `ai-${ts}-${i}` }));
+          const existingList = viewingHistorical ? JSON.parse(viewingHistorical.expenses || '[]') : [];
+          const finalList = [...existingList.filter(x => x.isMetadata), ...newExpenses];
+          const histId = `hist-${year}-${month}`;
+          const histRow = { id: histId, month, year, timestamp: ts, amount: parsed.totalFinal || currentBase, aiReport: parsed.aiReport || `Pensión ${meses[month]} ${year}`, expenses: JSON.stringify(finalList), baseUsed: parsed.base || currentBase };
+          setHistory(prev => { const ex = prev.some(h => h.id === histId); return ex ? prev.map(h => h.id === histId ? histRow : h) : [histRow, ...prev]; });
+          setAiReport(histRow.aiReport);
+          supabase.from('history').upsert(histRow).then(({ error }) => { if (!error) notify(`✓ ${newExpenses.length} movimientos registrados vía ${model}`); });
+          return;
+        } else {
+          // PDF escaneado sin texto → usar vision de Gemini
+          const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onloadend = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+          imageBase64 = dataUrl.split(',')[1];
+          mimeType = 'application/pdf';
+          if (!keys.gemini) throw new Error('PDF escaneado detectado. Configura Gemini para leerlo visualmente.');
+        }
+      } else {
+        // RUTA IMAGEN
+        const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onloadend = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
+        imageBase64 = dataUrl.split(',')[1];
+      }
+
+      // Vision para imágenes y PDFs escaneados
+      const visionPrompt = `Analiza este documento de pensión y extrae todos los movimientos. Devuelve SOLO JSON:\n{"base":5408.00,"totalFinal":5408.00,"aiReport":"Resumen","expenses":[{"name":"CONCEPTO","amount":100.00,"paidBy":"haidar","responsibility":"shared","installments":1}]}`;
+      let responseText, usedModel;
+      if (mimeType === 'application/pdf' && keys.gemini) {
+        const gemRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keys.gemini}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: visionPrompt }, { inlineData: { mimeType, data: imageBase64 } }] }], generationConfig: { temperature: 0.1 } }) });
+        const gemJson = await gemRes.json();
+        if (gemJson.error) throw new Error(`Gemini: ${gemJson.error.message}`);
+        responseText = gemJson.candidates?.[0]?.content?.parts?.[0]?.text;
+        usedModel = 'Gemini Vision';
+      } else {
+        const res = await callAiFailover({ prompt: visionPrompt, imageBase64, mimeType });
+        responseText = res.text; usedModel = res.model;
+      }
+      if (!responseText) throw new Error('La IA no retornó respuesta');
+      const jsonMatch = responseText.replace(/```json|```/gi, '').match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error(`Sin JSON válido: ${responseText.substring(0, 150)}`);
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (!Array.isArray(parsed.expenses) || !parsed.expenses.length) throw new Error('No se encontraron movimientos');
+      const ts = Date.now();
+      const newExpenses = parsed.expenses.map((ex, i) => ({ ...calculateImpact({ ...ex, id: `ai-${ts}-${i}` }), id: `ai-${ts}-${i}` }));
+      const existingList = viewingHistorical ? JSON.parse(viewingHistorical.expenses || '[]') : [];
+      const finalList = [...existingList.filter(x => x.isMetadata), ...newExpenses];
+      const histId = `hist-${year}-${month}`;
+      const histRow = { id: histId, month, year, timestamp: ts, amount: parsed.totalFinal || currentBase, aiReport: parsed.aiReport || `Pensión ${meses[month]} ${year}`, expenses: JSON.stringify(finalList), baseUsed: parsed.base || currentBase };
+      setHistory(prev => { const ex = prev.some(h => h.id === histId); return ex ? prev.map(h => h.id === histId ? histRow : h) : [histRow, ...prev]; });
+      setAiReport(histRow.aiReport);
+      supabase.from('history').upsert(histRow).then(({ error }) => { if (!error) notify(`✓ ${newExpenses.length} movimientos registrados vía ${usedModel}`); });
+
+    } catch (err) {
+      console.error('PDF Analysis Error:', err);
+      notify(`Error: ${err.message?.substring(0, 120) || 'Fallo desconocido'}`, "error");
+    } finally {
+      setIsScanning(false);
+      if (pdfAnalysisInputRef.current) pdfAnalysisInputRef.current.value = "";
+    }
   };
 
   const downloadTicketIfNew = (impactData) => {
@@ -364,7 +607,14 @@ const App = () => {
       if (!window.confirm("¿Deseas sobreescribir este mes?")) return;
     }
 
-    const histRow = { id, month, year, amount: totalFinal, aiReport, expenses: JSON.stringify(activeAjustes), baseUsed: currentBase, timestamp: Date.now() };
+    let finalExpensesList = [...activeAjustes];
+    if (pendingMetadata) {
+      const mIdx = finalExpensesList.findIndex(x => x.isMetadata);
+      if (mIdx >= 0) finalExpensesList[mIdx] = { ...finalExpensesList[mIdx], ...pendingMetadata };
+      else finalExpensesList.unshift(pendingMetadata);
+    }
+
+    const histRow = { id, month, year, amount: totalFinal, aiReport, expenses: JSON.stringify(finalExpensesList), baseUsed: currentBase, timestamp: Date.now() };
     const nextExpenses = expenses.map(ex => ({ ...ex, installments: Math.max(1, ex.installments - 1) })).filter(ex => ex.installments > 0 || ex.responsibility === 'por_pagar');
 
     // Update Local State Optimista
@@ -408,6 +658,21 @@ const App = () => {
     const mainPdfBytes = doc.output('arraybuffer');
     let finalPdf = await PDFDocument.load(mainPdfBytes);
 
+    let meta = pendingMetadata || activeAjustes.find(x => x.isMetadata);
+    if (viewingHistorical) meta = JSON.parse(viewingHistorical.expenses || "[]").find(x => x.isMetadata) || meta;
+
+    if (meta && meta.pdfData) {
+      try {
+        const byteString = window.atob(meta.pdfData.split(',')[1]);
+        const ab = new ArrayBuffer(byteString.length);
+        const ia = new Uint8Array(ab);
+        for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+        const repPdf = await PDFDocument.load(ab);
+        const copied = await finalPdf.copyPages(repPdf, repPdf.getPageIndices());
+        copied.forEach(p => finalPdf.addPage(p));
+      } catch (e) { console.error("Error merging PDF report manual", e); }
+    }
+
     for (const aj of activeAjustes) {
       if (aj.imageData) {
         const page = finalPdf.addPage();
@@ -422,33 +687,50 @@ const App = () => {
       }
     }
 
+    if (meta && meta.ticketsData) {
+      for (const t of meta.ticketsData) {
+        try {
+          const page = finalPdf.addPage();
+          const { width, height } = page.getSize();
+          const byteString = window.atob(t.data.split(',')[1]);
+          const ab = new ArrayBuffer(byteString.length);
+          const ia = new Uint8Array(ab);
+          for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+          const img = t.type.includes('png') ? await finalPdf.embedPng(ab) : await finalPdf.embedJpg(ab);
+          const dims = img.scaleToFit(width - 40, height - 100);
+          page.drawText(`EVIDENCIA ADJUNTA: ${t.name}`, { x: 20, y: height - 40, size: 14 });
+          page.drawImage(img, { x: 20, y: height - 60 - dims.height, width: dims.width, height: dims.height });
+        } catch (e) { console.error("Error embedding manual ticket", e); }
+      }
+    }
+
     let cepToProcess = cepAttached;
-    if (viewingHistorical) {
-      const list = JSON.parse(viewingHistorical.expenses || "[]");
-      const metadata = list.find(x => x.isMetadata);
-      if (metadata && metadata.cepData) {
-        const byteString = window.atob(metadata.cepData.split(',')[1]);
-        const mimeStr = metadata.cepData.split(',')[0].split(':')[1].split(';')[0];
+    if (meta && meta.cepData && typeof meta.cepData === 'string' && !cepToProcess) {
+      try {
+        const byteString = window.atob(meta.cepData.split(',')[1]);
+        const mimeStr = meta.cepData.split(',')[0].split(':')[1].split(';')[0];
         const ab = new ArrayBuffer(byteString.length);
         const ia = new Uint8Array(ab);
         for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
         cepToProcess = new Blob([ab], { type: mimeStr });
-      }
+      } catch (e) { console.error("Error reconstr cep", e); }
     }
 
-    if (cepToProcess) {
-      const cepBuffer = await cepToProcess.arrayBuffer();
-      if (cepToProcess.type === 'application/pdf') {
-        const cepPdf = await PDFDocument.load(cepBuffer);
-        const copied = await finalPdf.copyPages(cepPdf, cepPdf.getPageIndices());
-        copied.forEach(p => finalPdf.addPage(p));
-      } else {
-        const page = finalPdf.addPage();
-        const img = cepToProcess.type === 'image/png' ? await finalPdf.embedPng(cepBuffer) : await finalPdf.embedJpg(cepBuffer);
-        const { width, height } = page.getSize();
-        const dims = img.scaleToFit(width - 40, height - 100);
-        page.drawImage(img, { x: 20, y: height - 60 - dims.height, width: dims.width, height: dims.height });
-      }
+    if (cepToProcess && cepToProcess instanceof Blob) {
+      try {
+        const cepBuffer = await cepToProcess.arrayBuffer();
+        if (cepToProcess.type === 'application/pdf') {
+          const cepPdf = await PDFDocument.load(cepBuffer);
+          const copied = await finalPdf.copyPages(cepPdf, cepPdf.getPageIndices());
+          copied.forEach(p => finalPdf.addPage(p));
+        } else {
+          const page = finalPdf.addPage();
+          const img = cepToProcess.type === 'image/png' ? await finalPdf.embedPng(cepBuffer) : await finalPdf.embedJpg(cepBuffer);
+          const { width, height } = page.getSize();
+          const dims = img.scaleToFit(width - 40, height - 100);
+          page.drawImage(img, { x: 20, y: height - 60 - dims.height, width: dims.width, height: dims.height });
+        }
+      } catch (e) { console.error("Error embed cep", e); }
     }
 
     const pdfOutput = await finalPdf.save();
@@ -465,6 +747,60 @@ const App = () => {
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#202124] font-sans pb-20 selection:bg-blue-100">
 
+      {/* MODAL ANUAL */}
+      {showAnnualSummary && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-[32px] p-8 max-w-lg w-full shadow-2xl overflow-y-auto max-h-[90vh]">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="font-black text-[#3C4043] tracking-tighter uppercase text-xl flex items-center gap-2"><Layers className="w-6 h-6 text-blue-600" /> Resumen Anual {year}</h3>
+              <button onClick={() => setShowAnnualSummary(false)} className="p-2 bg-slate-100 rounded-full hover:bg-slate-200 text-slate-500"><X className="w-5 h-5" /></button>
+            </div>
+
+            {(() => {
+              const anualHist = (history || []).filter(h => h && h.year === year);
+              const sumaTotal = anualHist.reduce((acc, h) => acc + (parseFloat(h.amount) || 0), 0);
+              return (
+                <div>
+                  <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6 text-center mb-6">
+                    <p className="text-[10px] uppercase font-black text-blue-500 tracking-widest mb-2">Total Consolidado este Año</p>
+                    <p className="text-4xl font-black text-blue-700">{fmt(sumaTotal)}</p>
+                  </div>
+
+                  <div className="space-y-2 mb-6">
+                    {anualHist.sort((a, b) => a.month - b.month).map(h => (
+                      <div key={h.id} className="flex justify-between items-center bg-slate-50 p-4 rounded-xl border border-slate-100">
+                        <span className="text-xs font-black uppercase text-slate-600">{meses[h.month]}</span>
+                        <span className="font-black text-slate-800">{fmt(h.amount)}</span>
+                      </div>
+                    ))}
+                    {anualHist.length === 0 && <p className="text-center text-slate-400 text-sm font-bold p-4">No hay datos archivados en {year}</p>}
+                  </div>
+
+                  <button onClick={async () => {
+                    if (anualHist.length === 0) return notify("No hay historial en " + year, "error");
+                    notify("Generando reporte anual extensivo...");
+                    const promptText = `Eres un auditor financiero experto. Redacta un INFORME ANUAL EXTENSIVO formal de la pensión alimenticia de Kenney, año ${year}. 
+Historial por mes (Total depositado sumó ${fmt(sumaTotal)}):
+${JSON.stringify(anualHist.map(h => ({ mes: meses[h.month], monto: h.amount, reporteCorto: h.aiReport })))}
+
+Escribe un análisis completo sobre los gastos del año y el balance general. Genera el reporte final listo para presentarse formalmente, asegurándote de desglosar y explicar conclusiones generales.`;
+
+                    try {
+                      const { text, model } = await callAiFailover({ prompt: promptText });
+                      setAiReport(text);
+                      setShowAnnualSummary(false);
+                      notify(`✓ Informe anual generado en pantalla`);
+                    } catch (err) { notify("Error con IA: " + err.message, "error"); }
+                  }} className="w-full flex items-center justify-center gap-2 py-4 bg-indigo-600 font-black uppercase text-xs text-white rounded-2xl shadow-lg hover:bg-indigo-700 transition-all">
+                    <BrainCircuit className="w-4 h-4" /> Generar Informe Extenso con IA
+                  </button>
+                </div>
+              )
+            })()}
+          </div>
+        </div>
+      )}
+
       {/* HEADER */}
       <div className="max-w-2xl mx-auto pt-6 px-4">
         <div className="bg-white p-5 rounded-[28px] shadow-sm border border-[#DADCE0] flex justify-between items-center mb-6">
@@ -476,6 +812,7 @@ const App = () => {
             </div>
           </div>
           <div className="flex gap-2">
+            <button onClick={() => setShowAnnualSummary(true)} className="p-3 bg-slate-50 hover:bg-slate-100 rounded-2xl text-slate-600 shadow-sm transition-all text-xs font-black uppercase text-blue-600 flex items-center gap-2"><Layers className="w-5 h-5" /> Anual</button>
             <button onClick={() => setShowConfig(true)} className="p-3 bg-slate-50 hover:bg-slate-100 rounded-2xl text-slate-600 shadow-sm transition-all"><Database className="w-5 h-5" /></button>
             <button onClick={() => setShowHistory(true)} className="p-3 bg-slate-50 hover:bg-slate-100 rounded-2xl text-slate-600 shadow-sm transition-all"><History className="w-5 h-5" /></button>
           </div>
@@ -489,27 +826,84 @@ const App = () => {
               <div className="text-3xl font-black text-[#1A73E8] tracking-tighter">{fmt(currentBase)}</div>
             </div>
             <div className="flex items-center bg-[#F1F3F4] p-1.5 rounded-full border border-[#DADCE0]">
-              <button onClick={() => { setIsEditingHistorical(false); setMonth(m => m === 0 ? (setYear(y => y - 1), 11) : m - 1); }} className="p-1 hover:bg-white rounded-full shadow-sm transition-all"><Minus className="w-4 h-4" /></button>
-              <span className="mx-4 text-[10px] font-black uppercase min-w-[100px] text-center">{meses[month]} {year}</span>
-              <button onClick={() => { setIsEditingHistorical(false); setMonth(m => m === 11 ? (setYear(y => y + 1), 0) : m + 1); }} className="p-1 hover:bg-white rounded-full shadow-sm"><Plus className="w-4 h-4" /></button>
+              <button onClick={() => {
+                setIsEditingHistorical(false);
+                setMonth(m => {
+                  if (m === 0) {
+                    setYear(y => y - 1);
+                    return 11;
+                  }
+                  return m - 1;
+                });
+              }} className="p-1 hover:bg-white rounded-full shadow-sm transition-all"><Minus className="w-4 h-4" /></button>
+              <span className="mx-4 text-[10px] font-black uppercase min-w-[100px] text-center">{meses[month] || "MES"} {year}</span>
+              <button onClick={() => {
+                setIsEditingHistorical(false);
+                setMonth(m => {
+                  if (m === 11) {
+                    setYear(y => y + 1);
+                    return 0;
+                  }
+                  return m + 1;
+                });
+              }} className="p-1 hover:bg-white rounded-full shadow-sm"><Plus className="w-4 h-4" /></button>
             </div>
           </div>
         </div>
 
-        {/* TOTAL BANNER */}
-        <div className="bg-white border-b-4 border-[#1A73E8] rounded-[40px] p-12 text-center shadow-md mb-8 relative overflow-hidden group">
-          <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] mb-4 italic">
-            {viewingHistorical && !isEditingHistorical ? 'Vista de Archivo Histórico' : 'Monto Final del Depósito'}
-          </p>
-          <h2 className={`text-7xl font-black tracking-tighter animate-in slide-in-from-top-2 ${viewingHistorical && !isEditingHistorical ? 'text-slate-500' : 'text-slate-900'}`}>{fmt(totalFinal)}</h2>
-          {viewingHistorical && (
-            <button onClick={() => setIsEditingHistorical(!isEditingHistorical)} className={`mt-6 px-6 py-2 rounded-full text-xs font-black uppercase transition-all shadow-sm ${isEditingHistorical ? 'bg-red-50 text-red-600 border border-red-200' : 'bg-slate-50 text-slate-600 border border-slate-200'}`}>
-              {isEditingHistorical ? 'Bloquear Archivo' : 'Editar Histórico / Adjuntar Reportes'}
-            </button>
-          )}
-        </div>
+        {/* TOTAL BANNER LÍQUIDO (MODIFICADO PARA EDICIÓN DIRECTA) */}
+        {(() => {
+          const now = new Date();
+          const isPastMonth = year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth());
+          return (
+            <div className="bg-white border-b-4 border-[#1A73E8] rounded-[40px] p-8 text-center shadow-md mb-8 relative overflow-hidden group">
+              <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] mb-4 italic">
+                {viewingHistorical ? 'Editando Archivo Histórico' : isPastMonth ? 'Mes Pasado (Edición Manual)' : 'Monto Final del Depósito'}
+              </p>
 
-        {/* FORMULARIO UNIFICADO */}
+              {isPastMonth || viewingHistorical ? (
+                <div className="flex flex-col items-center justify-center gap-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-4xl text-slate-400 font-black">$</span>
+                    <input
+                      type="number"
+                      value={(viewingHistorical ? viewingHistorical.amount : tempTotalManual) || ""}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        if (viewingHistorical) {
+                          setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? { ...h, amount: v } : h));
+                        } else {
+                          setTempTotalManual(v);
+                        }
+                      }}
+                      placeholder={fmt(viewingHistorical ? viewingHistorical.amount : (tempTotalManual || totalFinal)).replace('$', '').replace(/,/g, '')}
+                      className="text-6xl font-black bg-slate-50 border-b-4 border-blue-200 text-center text-blue-600 outline-none w-64 rounded-2xl py-2 focus:border-blue-600 transition-all font-mono"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-400 font-bold">Edita el total depositado manualmente</p>
+                </div>
+              ) : (
+                <h2 className="text-7xl font-black tracking-tighter text-slate-900">{fmt(totalFinal)}</h2>
+              )}
+
+              {(isPastMonth || viewingHistorical) && (
+                <div className="mt-8 flex flex-wrap justify-center gap-3">
+                  <button onClick={() => manualTicketsRef.current.click()} className="px-5 py-3 rounded-full text-[10px] font-black uppercase transition-all shadow-sm bg-green-50 text-green-700 border border-green-200 hover:bg-green-600 hover:text-white flex items-center gap-2">
+                    <Images className="w-4 h-4" /> 1. Adjuntar Tickets
+                  </button>
+                  <button onClick={() => manualPdfRef.current.click()} className="px-5 py-3 rounded-full text-[10px] font-black uppercase transition-all shadow-sm bg-red-50 text-red-700 border border-red-200 hover:bg-red-600 hover:text-white flex items-center gap-2">
+                    <FileText className="w-4 h-4" /> 2. Adjuntar PDF Reporte
+                  </button>
+                  <button onClick={() => cepInputRef.current.click()} className="px-5 py-3 rounded-full text-[10px] font-black uppercase transition-all shadow-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-600 hover:text-white flex items-center gap-2">
+                    <Paperclip className="w-4 h-4" /> 3. Adjuntar CEP
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {/* FORMULARIO: siempre visible en histórico (ya es edición por defecto) y en mes activo */}
         {(!viewingHistorical || isEditingHistorical) && (
           <div ref={formRef} className={`bg-white border-2 rounded-[32px] p-8 mb-8 shadow-sm transition-all ${editingId ? 'border-blue-500 scale-[1.02]' : 'border-[#DADCE0]'}`}>
             <div className="flex items-center justify-between mb-6">
@@ -579,90 +973,109 @@ const App = () => {
 
         {/* NARRATIVA RESUMEN */}
         <div className="bg-white border border-[#DADCE0] rounded-[32px] p-6 mb-8 shadow-sm">
-          <div className="flex items-center gap-2 mb-3 text-blue-600">
-            <Type className="w-4 h-4" />
-            <h4 className="text-[10px] font-black uppercase tracking-widest">Resumen Desglosado</h4>
+          <div className="flex items-center justify-between mb-3 text-blue-600">
+            <div className="flex items-center gap-2">
+              <Type className="w-4 h-4" />
+              <h4 className="text-[10px] font-black uppercase tracking-widest">Resumen Desglosado</h4>
+            </div>
+            <button onClick={generateSmartNarrative} className="p-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-600 hover:text-white transition-all flex items-center gap-2 text-[9px] font-black uppercase">
+              <BrainCircuit className="w-3 h-3" /> Redactar con IA
+            </button>
           </div>
           <textarea ref={textareaRef} value={aiReport} onChange={e => setAiReport(e.target.value)} className="w-full min-h-[200px] p-4 bg-slate-50 rounded-2xl text-xs font-mono text-slate-700 leading-relaxed outline-none resize-none border border-slate-200 shadow-inner" />
         </div>
 
         {/* LISTADO ÚNICO UNIFICADO */}
-        <div className="space-y-4 mb-16 px-2">
-          <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4 tracking-[0.2em]">Movimientos registrados</p>
-          {activeAjustes.map((aj, i) => (
-            <div key={aj.id || i} className={`p-6 rounded-[28px] border flex justify-between items-center group transition-all animate-in slide-in-from-left-2 ${aj.responsibility === 'por_pagar' ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-100'}`}>
-              <div className="flex gap-4 items-center">
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm ${aj.responsibility === 'por_pagar' ? 'bg-indigo-600 text-white' : aj.monthlyImpact < 0 ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-500'}`}>
-                  {aj.responsibility === 'por_pagar' ? <Zap className="w-6 h-6" /> : aj.isRopaVirtual ? <Shirt className="w-6 h-6" /> : <CreditCard className="w-6 h-6" />}
-                </div>
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h5 className={`text-xs font-black uppercase ${aj.responsibility === 'por_pagar' ? 'text-indigo-900' : 'text-slate-700'}`}>{aj.name}</h5>
-                    {aj.imageData && <FileImage className="w-3 h-3 text-green-500" />}
+        {(!viewingHistorical || isEditingHistorical) && (
+          <div className="space-y-4 mb-16 px-2">
+            <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-4 tracking-[0.2em]">Movimientos registrados</p>
+            {activeAjustes.map((aj, i) => (
+              <div key={aj.id || i} className={`p-6 rounded-[28px] border flex justify-between items-center group transition-all animate-in slide-in-from-left-2 ${aj.responsibility === 'por_pagar' ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-100'}`}>
+                <div className="flex gap-4 items-center">
+                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm ${aj.responsibility === 'por_pagar' ? 'bg-indigo-600 text-white' : aj.monthlyImpact < 0 ? 'bg-red-50 text-red-500' : 'bg-blue-50 text-blue-500'}`}>
+                    {aj.responsibility === 'por_pagar' ? <Zap className="w-6 h-6" /> : aj.isRopaVirtual ? <Shirt className="w-6 h-6" /> : <CreditCard className="w-6 h-6" />}
                   </div>
-                  <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">
-                    PAGÓ: {aj.paidBy} • {aj.responsibility === 'por_pagar' ? 'DEPÓSITO DIRECTO' : `AJUSTE (${fmt(aj.originalAmount)})`}
-                  </p>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h5 className={`text-xs font-black uppercase ${aj.responsibility === 'por_pagar' ? 'text-indigo-900' : 'text-slate-700'}`}>{aj.name}</h5>
+                      {aj.imageData && <FileImage className="w-3 h-3 text-green-500" />}
+                    </div>
+                    <p className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">
+                      PAGÓ: {aj.paidBy} • {aj.responsibility === 'por_pagar' ? 'DEPÓSITO DIRECTO' : `AJUSTE (${fmt(aj.originalAmount)})`}
+                    </p>
+                  </div>
                 </div>
-              </div>
-              <div className="text-right flex items-center gap-4">
-                <div className={`text-lg font-black ${aj.responsibility === 'por_pagar' ? 'text-indigo-600' : aj.monthlyImpact < 0 ? 'text-red-500' : 'text-blue-600'}`}>
-                  {aj.monthlyImpact < 0 ? '-' : '+'}{fmt(Math.abs(aj.monthlyImpact))}
-                </div>
-                {!aj.isRopaVirtual && (!viewingHistorical || isEditingHistorical) && (
-                  <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button onClick={() => {
-                      setEditingId(aj.id);
-                      setNewEx({
-                        name: aj.name,
-                        amount: aj.originalAmount,
-                        paidBy: aj.paidBy,
-                        responsibility: aj.responsibility,
-                        installments: aj.installments || 1,
-                        date: aj.date || new Date().toISOString().split('T')[0],
-                        imageData: aj.imageData || null
-                      });
-                      if (formRef.current) formRef.current.scrollIntoView({ behavior: 'smooth' });
-                    }} className="p-2 bg-blue-50 text-blue-500 rounded-full shadow-sm hover:bg-blue-100 transition-colors"><Pencil className="w-4 h-4" /></button>
-                    <button onClick={async () => {
-                      if (viewingHistorical && isEditingHistorical) {
-                        let list = JSON.parse(viewingHistorical.expenses || "[]").filter(x => x.id !== aj.id);
-                        const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list) };
-                        setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
-                        supabase.from('history').update({ expenses: JSON.stringify(list) }).eq('id', viewingHistorical.id);
-                        notify("Eliminado del historial");
-                      } else {
-                        setExpenses(e => e.filter(x => x.id !== aj.id));
-                        supabase.from('expenses').delete().eq('id', aj.id).then(({ error }) => {
-                          if (error) notify("Error eliminando de la nube", "error");
+                <div className="text-right flex items-center gap-4">
+                  <div className={`text-lg font-black ${aj.responsibility === 'por_pagar' ? 'text-indigo-600' : aj.monthlyImpact < 0 ? 'text-red-500' : 'text-blue-600'}`}>
+                    {aj.monthlyImpact < 0 ? '-' : '+'}{fmt(Math.abs(aj.monthlyImpact))}
+                  </div>
+                  {!aj.isRopaVirtual && (viewingHistorical ? isEditingHistorical : true) && (
+                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button onClick={() => {
+                        setEditingId(aj.id);
+                        setNewEx({
+                          name: aj.name,
+                          amount: aj.originalAmount,
+                          paidBy: aj.paidBy,
+                          responsibility: aj.responsibility,
+                          installments: aj.installments || 1,
+                          date: aj.date || new Date().toISOString().split('T')[0],
+                          imageData: aj.imageData || null
                         });
-                      }
-                    }} className="p-2 bg-red-50 text-red-500 rounded-full shadow-sm hover:bg-red-100 transition-colors"><Trash2 className="w-4 h-4" /></button>
-                  </div>
-                )}
+                        if (formRef.current) formRef.current.scrollIntoView({ behavior: 'smooth' });
+                      }} className="p-2 bg-blue-50 text-blue-500 rounded-full shadow-sm hover:bg-blue-100 transition-colors"><Pencil className="w-4 h-4" /></button>
+                      <button onClick={async () => {
+                        if (viewingHistorical && isEditingHistorical) {
+                          let list = JSON.parse(viewingHistorical.expenses || "[]").filter(x => x.id !== aj.id);
+                          const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list) };
+                          setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
+                          supabase.from('history').update({ expenses: JSON.stringify(list) }).eq('id', viewingHistorical.id);
+                          notify("Eliminado del historial");
+                        } else {
+                          setExpenses(e => e.filter(x => x.id !== aj.id));
+                          supabase.from('expenses').delete().eq('id', aj.id).then(({ error }) => {
+                            if (error) notify("Error eliminando de la nube", "error");
+                          });
+                        }
+                      }} className="p-2 bg-red-50 text-red-500 rounded-full shadow-sm hover:bg-red-100 transition-colors"><Trash2 className="w-4 h-4" /></button>
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
+
+        {/* CONTROLES HISTÓRICOS */}
+        {viewingHistorical && !isEditingHistorical && (
+          <div className="bg-amber-50 rounded-3xl p-6 mb-8 text-center border border-amber-200">
+            <p className="text-amber-800 text-xs font-bold mb-4">Estás viendo el resumen guardado interactuando únicamente con los datos finales.</p>
+            <button onClick={() => setIsEditingHistorical(true)} className="px-6 py-3 bg-white text-amber-700 font-black rounded-full shadow-sm text-xs uppercase border border-amber-200 hover:bg-amber-100 transition-all flex items-center justify-center gap-2 mx-auto">
+              <Pencil className="w-4 h-4" /> Editar Y ver desglose de mes
+            </button>
+          </div>
+        )}
 
         {/* ACCIONES FINALES */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 px-2">
-          <div className="flex flex-col gap-2">
+          {(!viewingHistorical || isEditingHistorical) ? (
             <button onClick={archiveMonth} className="w-full bg-[#1E8E3E] text-white rounded-3xl font-black text-xs uppercase shadow-xl flex items-center justify-center gap-3 border-b-4 border-[#125827] active:border-b-0 active:translate-y-1 transition-all py-5">
-              <CheckCircle2 className="w-6 h-6" /> Finalizar Periodo
+              <CheckCircle2 className="w-6 h-6" /> {viewingHistorical ? "Guardar Cambios" : "Finalizar Periodo"}
             </button>
-            <button onClick={generatePDF} className="w-full flex items-center justify-center gap-3 py-5 bg-[#1A73E8] text-white rounded-3xl font-black text-xs uppercase shadow-xl hover:bg-blue-700 transition-all">
-              <Printer className="w-5 h-5" /> Reporte PDF + Fotos
-            </button>
-          </div>
+          ) : <div />}
+          <button onClick={generatePDF} className={`w-full flex items-center justify-center gap-3 py-5 bg-[#1A73E8] text-white rounded-3xl font-black text-xs uppercase shadow-xl hover:bg-blue-700 transition-all ${viewingHistorical && !isEditingHistorical ? 'col-span-1 sm:col-span-2' : ''}`}>
+            <Printer className="w-5 h-5" /> REGENERAR REPORTE DEL MES Y DESCARGAR
+          </button>
         </div>
 
         {/* ACCIONES FINALES LATERALES */}
-        <div className="flex gap-4 px-2 mt-4">
-          <button onClick={() => cepInputRef.current.click()} className={`flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${cepAttached ? 'bg-green-50 text-green-700 border-green-200' : 'bg-white text-slate-400 border-slate-200 shadow-sm'}`}>
-            <Paperclip className="w-4 h-4" /> {viewingHistorical ? 'Vincular DOC A HISTORIAL' : (cepAttached ? 'CEP Vinculado ✓' : 'Adjuntar Documento CEP')}
-          </button>
-        </div>
+        {(!viewingHistorical || isEditingHistorical) && (
+          <div className="flex gap-4 px-2 mt-4">
+            <button onClick={() => cepInputRef.current.click()} className={`flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${cepAttached ? 'bg-green-50 text-green-700 border-green-200' : 'bg-white text-slate-400 border-slate-200 shadow-sm'}`}>
+              <Paperclip className="w-4 h-4" /> {viewingHistorical ? 'Vincular DOC A HISTORIAL' : (cepAttached ? 'CEP Vinculado ✓' : 'Adjuntar Documento CEP')}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* MODAL HISTORIAL */}
@@ -674,21 +1087,29 @@ const App = () => {
               <button onClick={() => setShowHistory(false)}><X className="w-5 h-5" /></button>
             </div>
             <div className="p-6 overflow-y-auto space-y-3 flex-1 custom-scroll">
-              {history.map(h => (
-                <div key={h.id} className="p-5 border border-slate-100 rounded-[28px] flex justify-between items-center hover:bg-blue-50/50 transition-all group">
-                  <div>
-                    <p className="text-[9px] font-black text-slate-400">{h.year}</p>
-                    <h4 className="font-black text-sm uppercase text-slate-700 flex items-center gap-1">
-                      {meses[h.month]} {(h.expenses?.includes('isMetadata')) && <Paperclip className="w-3 h-3 text-green-500" />}
-                    </h4>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-base font-black text-[#1A73E8] mr-2">{fmt(h.amount)}</span>
-                    <button onClick={() => { setMonth(h.month); setYear(h.year); setIsEditingHistorical(true); setShowHistory(false); }} className="p-2 bg-amber-50 text-amber-600 rounded-xl hover:bg-amber-600 hover:text-white transition-all"><Pencil className="w-4 h-4" /></button>
-                    <button onClick={() => { setMonth(h.month); setYear(h.year); setIsEditingHistorical(false); setShowHistory(false); }} className="p-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-600 hover:text-white transition-all"><Eye className="w-4 h-4" /></button>
-                  </div>
+              {(history || []).length === 0 ? (
+                <div className="text-center p-8 bg-blue-50/50 rounded-[28px] border border-blue-100/50">
+                  <p className="text-xs font-bold text-blue-800 mb-2">No tienes meses archivados</p>
+                  <p className="text-[10px] text-blue-600/80 leading-relaxed font-medium">Para crear un archivo histórico, usa las flechas (+ / -) para ir a un mes pasado, agrega movimientos y presiona <b>"FINALIZAR PERIODO"</b>.</p>
                 </div>
-              ))}
+              ) : (
+                (history || []).map(h => h && (
+                  <div key={h.id} className="p-5 border border-slate-100 rounded-[28px] flex justify-between items-center hover:bg-amber-50/50 transition-all group">
+                    <div>
+                      <p className="text-[9px] font-black text-slate-400">{h.year}</p>
+                      <h4 className="font-black text-sm uppercase text-slate-700 flex items-center gap-1">
+                        {meses[h.month] || "MES"} {(h.expenses?.includes('isMetadata')) && <Paperclip className="w-3 h-3 text-green-500" />}
+                      </h4>
+                      <p className="text-[9px] text-slate-400 font-bold">{fmt(h.amount)}</p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button onClick={() => { setMonth(h.month); setYear(h.year); setIsEditingHistorical(true); setShowHistory(false); }} className="p-3 bg-amber-500 text-white rounded-2xl hover:bg-amber-600 transition-all flex items-center gap-2 text-[9px] font-black uppercase shadow-md">
+                        <Pencil className="w-4 h-4" /> Editar
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
             <div className="p-4 bg-slate-50 border-t flex justify-center">
               <button onClick={async () => {
@@ -703,34 +1124,12 @@ const App = () => {
         </div>
       )}
 
-      <input type="file" ref={galleryInputRef} accept="image/*" className="hidden" onChange={handleImageScan} />
-      <input type="file" ref={cepInputRef} accept="application/pdf,image/*" className="hidden" onChange={(e) => {
-        if (viewingHistorical && isEditingHistorical) {
-          const file = e.target.files[0];
-          if (!file) return;
-          const reader = new FileReader();
-          reader.onloadend = () => {
-            const base64 = reader.result;
-            const list = JSON.parse(viewingHistorical.expenses || "[]");
-            let metaIndex = list.findIndex(x => x.isMetadata);
-            if (metaIndex >= 0) list[metaIndex].cepData = base64;
-            else list.push({ isMetadata: true, cepData: base64, id: 'metadata-' + Date.now() });
-
-            const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list) };
-            setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
-            supabase.from('history').update({ expenses: JSON.stringify(list) }).eq('id', viewingHistorical.id);
-            notify("Documento vinculado al historial ✓");
-          };
-          reader.readAsDataURL(file);
-        } else {
-          if (viewingHistorical && !isEditingHistorical) {
-            notify("Debes Habilitar la Edición arriba para vincular.", "error");
-            return;
-          }
-          setCepAttached(e.target.files[0]);
-          notify("CEP Adjuntado al mes actual.");
-        }
-      }} />
+      {/* INPUTS INVISIBLES DE EVIDENCIA */}
+      <input type="file" ref={manualPdfRef} accept="application/pdf" className="hidden" onChange={(e) => handleAttachment(e, 'pdf')} />
+      <input type="file" ref={manualTicketsRef} accept="image/*" multiple className="hidden" onChange={(e) => handleAttachment(e, 'tickets')} />
+      <input type="file" ref={galleryInputRef} accept="image/*" capture="environment" className="hidden" onChange={handleImageScan} />
+      <input type="file" ref={cepInputRef} accept="image/*,application/pdf" className="hidden" onChange={(e) => handleAttachment(e, 'cep')} />
+      <input type="file" ref={pdfAnalysisInputRef} accept="image/*,application/pdf" className="hidden" onChange={analyzePdfForHistory} />
 
       {/* MODAL CONFIGURACIÓN API KEY */}
       {showConfig && (
@@ -741,27 +1140,33 @@ const App = () => {
               <button onClick={() => setShowConfig(false)}><X className="w-5 h-5" /></button>
             </div>
             <div className="p-6 space-y-4">
-              <p className="text-xs text-slate-500 font-medium leading-relaxed">
-                Para usar la inteligencia artificial que escanea los tickets y sumar los conceptos de manera automática, necesitas tu clave gratuita de Google Gemini.
+              <p className="text-[10px] text-slate-500 font-medium leading-relaxed uppercase tracking-tighter">
+                Motores de Inteligencia Híbrida (Failover Activo)
               </p>
 
               <div>
-                <span className="text-[10px] font-black uppercase text-slate-400 ml-2">Tu API Key (AI):</span>
-                <input
-                  type="password"
-                  value={userApiKey}
-                  onChange={e => setUserApiKey(e.target.value)}
-                  placeholder="AIzaSy..."
-                  className="w-full mt-1 bg-slate-50 p-4 rounded-2xl outline-none text-sm font-mono border border-slate-200 focus:border-blue-400 transition-all"
-                />
+                <span className="text-[9px] font-black uppercase text-slate-400 ml-2">Google Gemini:</span>
+                <input type="password" value={keys.gemini} onChange={e => setKeys(p => ({ ...p, gemini: e.target.value }))} placeholder="AIzaSy..." className="w-full mt-1 bg-slate-50 p-3 rounded-xl outline-none text-xs font-mono border border-slate-200 focus:border-blue-400 transition-all" />
+              </div>
+
+              <div>
+                <span className="text-[9px] font-black uppercase text-slate-400 ml-2">Groq Vision:</span>
+                <input type="password" value={keys.groq} onChange={e => setKeys(p => ({ ...p, groq: e.target.value }))} placeholder="gsk_..." className="w-full mt-1 bg-slate-50 p-3 rounded-xl outline-none text-xs font-mono border border-slate-200 focus:border-orange-400 transition-all" />
+              </div>
+
+              <div>
+                <span className="text-[9px] font-black uppercase text-slate-400 ml-2">OpenRouter (Pro):</span>
+                <input type="password" value={keys.openrouter} onChange={e => setKeys(p => ({ ...p, openrouter: e.target.value }))} placeholder="sk-or-v1-..." className="w-full mt-1 bg-slate-50 p-3 rounded-xl outline-none text-xs font-mono border border-slate-200 focus:border-purple-400 transition-all" />
               </div>
 
               <button onClick={() => {
-                localStorage.setItem(LOCAL_API_KEY_STORAGE, userApiKey);
-                notify("Configuración de IA guardada");
+                localStorage.setItem(STORAGE.GEMINI, keys.gemini);
+                localStorage.setItem(STORAGE.GROQ, keys.groq);
+                localStorage.setItem(STORAGE.OPENROUTER, keys.openrouter);
+                notify("Llaves de IA sincronizadas ✓");
                 setShowConfig(false);
-              }} className="w-full py-4 mt-2 bg-[#1A73E8] text-white rounded-2xl font-black text-xs uppercase shadow-lg hover:bg-blue-700 transition-all">
-                Guardar Llave
+              }} className="w-full py-4 mt-2 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase shadow-lg hover:bg-black transition-all">
+                Guardar Configuración
               </button>
             </div>
           </div>
