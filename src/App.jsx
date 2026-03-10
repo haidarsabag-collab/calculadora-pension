@@ -475,7 +475,7 @@ const App = () => {
     const restan = list.filter(a => a && a.monthlyImpact < 0);
 
     let text = `ESTADO DE CUENTA - PENSIÓN ALIMENTICIA\n`;
-    text += `Beneficiario: Hadi Sabag | Proveedor: Haidar Sabag | Receptora: Kenny\n`;
+    text += `Beneficiario: Hadi Sabag | Proveedor: Haidar Sabag | Receptora: Kenny de Aquino\n`;
     text += `Periodo: ${meses[month] || "MES"} ${year}\n`;
     text += `==================================================\n\n`;
 
@@ -512,7 +512,7 @@ const App = () => {
     text += `==================================================\n\n`;
 
     text += `Nota: Se adjuntan comprobantes visuales al final de este reporte.\n\n`;
-    text += `Haidar Sabag — Proveedor de pensión alimenticia para Hadi Sabag.`;
+    text += `Saludos, Haidar Sabag.`;
     return text;
   }, [currentBase, activeAjustes, viewingHistorical, isEditingHistorical, totalFinal, month, year]);
 
@@ -1029,7 +1029,7 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
       doc.setFontSize(16); doc.setTextColor(26, 115, 232);
       doc.text(`ESTADO DE CUENTA - PENSIÓN ALIMENTICIA`, 20, 20);
       doc.setFontSize(9); doc.setTextColor(100);
-      doc.text(`Beneficiario: Hadi Sabag  |  Proveedor: Haidar Sabag  |  Receptora: Kenny`, 20, 28);
+      doc.text(`Beneficiario: Hadi Sabag  |  Proveedor: Haidar Sabag  |  Receptora: Kenny de Aquino`, 20, 28);
       doc.setFontSize(11); doc.setTextColor(100);
       doc.text(`${monthName.toUpperCase()} ${yr}`, 20, 36);
       doc.setFontSize(9); doc.setTextColor(0);
@@ -1194,7 +1194,7 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
 CONTEXTO DEL CASO:
 - Beneficiario (menor): Hadi Sabag
 - Proveedor de la pensión: Haidar Sabag (padre)
-- Receptora de los pagos: Kenny (madre)
+- Receptora de los pagos: Kenny de Aquino (madre)
 
 HISTORIAL MES A MES (Total de todo el año: ${fmt(sumaTotal)}):
 ${JSON.stringify(anualHist.map(h => ({ mes: meses[h.month], depositado_total_mes: h.amount, reporte_original_texto: h.aiReport })))}
@@ -1202,7 +1202,7 @@ ${JSON.stringify(anualHist.map(h => ({ mes: meses[h.month], depositado_total_mes
 INSTRUCCIONES CLAVE:
 1. Analiza el historial provisto y elabora un "resumen de los resúmenes mes a mes" indicando qué meses destacaron, picos, o eventos importantes de manera fluida y ejecutiva.
 2. Crea un texto continuo, coherente y muy bien formateado listo para presentarse formalmente. No repitas la información punto por punto como máquina, explícala como informe de cierre de año.
-3. Usa los nombres correctos: el beneficiario es Hadi, los pagos son aportados por Haidar Sabag y recibidos por Kenny.
+3. Usa los nombres correctos: el beneficiario es Hadi, los pagos son aportados por Haidar Sabag y recibidos por Kenny de Aquino.
 4. Termina de manera formal el documento en tercera persona, mencionando que se emite a solicitud de Haidar Sabag, indicando el Balance Total de ${fmt(sumaTotal)} aportado durante ${year}.`;
 
                     try {
