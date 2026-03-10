@@ -307,18 +307,31 @@ const App = () => {
       {
         provider: 'GEMINI',
         key: keys.gemini,
-        models: ['gemini-1.5-flash', 'gemini-1.5-pro'],
+        models: ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-2.0-flash', 'gemini-1.5-pro'],
         call: async (key, model) => {
-          const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${key}`;
-          const res = await fetch(url, {
-            method: 'POST',
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }, ...(imageBase64 ? [{ inlineData: { mimeType, data: imageBase64 } }] : [])] }],
-              generationConfig: { responseMimeType: "application/json" }
-            })
-          });
-          const json = await res.json();
-          return json.candidates?.[0]?.content?.parts?.[0]?.text;
+          // Try v1 first, if it fails with 'not found', try v1beta
+          const versions = ['v1', 'v1beta'];
+          for (const v of versions) {
+            try {
+              const url = `https://generativelanguage.googleapis.com/${v}/models/${model}:generateContent?key=${key}`;
+              const res = await fetch(url, {
+                method: 'POST',
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: prompt }, ...(imageBase64 ? [{ inlineData: { mimeType, data: imageBase64 } }] : [])] }],
+                  generationConfig: { responseMimeType: "application/json" }
+                })
+              });
+              const json = await res.json();
+              if (json.error) {
+                if (json.error.message.includes("not found") && v === 'v1') continue;
+                throw new Error(json.error.message);
+              }
+              return json.candidates?.[0]?.content?.parts?.[0]?.text;
+            } catch (e) {
+              if (v === 'v1') continue;
+              throw e;
+            }
+          }
         }
       },
       {
@@ -478,19 +491,13 @@ const App = () => {
         imageBase64 = dataUrl.split(',')[1];
       }
 
-      // Vision para imágenes y PDFs escaneados
+      // Vision para imágenes y PDFs escaneados (USANDO FAILOVER AUTO)
       const visionPrompt = `Analiza este documento de pensión y extrae todos los movimientos. Devuelve SOLO JSON:\n{"base":5408.00,"totalFinal":5408.00,"aiReport":"Resumen","expenses":[{"name":"CONCEPTO","amount":100.00,"paidBy":"haidar","responsibility":"shared","installments":1}]}`;
       let responseText, usedModel;
-      if (mimeType === 'application/pdf' && keys.gemini) {
-        const gemRes = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${keys.gemini}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: visionPrompt }, { inlineData: { mimeType, data: imageBase64 } }] }], generationConfig: { temperature: 0.1 } }) });
-        const gemJson = await gemRes.json();
-        if (gemJson.error) throw new Error(`Gemini: ${gemJson.error.message}`);
-        responseText = gemJson.candidates?.[0]?.content?.parts?.[0]?.text;
-        usedModel = 'Gemini Vision';
-      } else {
-        const res = await callAiFailover({ prompt: visionPrompt, imageBase64, mimeType });
-        responseText = res.text; usedModel = res.model;
-      }
+
+      const res = await callAiFailover({ prompt: visionPrompt, imageBase64, mimeType });
+      responseText = res.text;
+      usedModel = res.model;
       if (!responseText) throw new Error('La IA no retornó respuesta');
       const jsonMatch = responseText.replace(/```json|```/gi, '').match(/\{[\s\S]*\}/);
       if (!jsonMatch) throw new Error(`Sin JSON válido: ${responseText.substring(0, 150)}`);
