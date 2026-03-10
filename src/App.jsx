@@ -326,18 +326,35 @@ const App = () => {
               const url = `https://generativelanguage.googleapis.com/${v}/models/${model}:generateContent?key=${key}`;
 
               const body = {
-                contents: [{ parts: [{ text: prompt }, ...(imageBase64 ? [{ inlineData: { mimeType, data: imageBase64 } }] : [])] }]
+                contents: [{
+                  parts: [
+                    { text: prompt + "\n\nIMPORTANTE: Responde EXCLUSIVAMENTE con el objeto JSON solicitado, sin texto antes ni después." },
+                    ...(imageBase64 ? [{ inlineData: { mimeType, data: imageBase64 } }] : [])
+                  ]
+                }]
               };
 
-              // Only add JSON mode if we are not sending an image/pdf (sometimes is picky)
+              // Correct parameter name for REST API is response_mime_type (snake_case)
               if (!imageBase64) {
-                body.generationConfig = { responseMimeType: "application/json" };
+                body.generationConfig = {
+                  response_mime_type: "application/json",
+                  temperature: 0.1
+                };
+              } else {
+                body.generationConfig = { temperature: 0.1 };
               }
 
               const res = await fetch(url, { method: 'POST', body: JSON.stringify(body) });
               const json = await res.json();
               if (json.error) {
                 console.error(`Gemini Error (${v}):`, json.error);
+                // If it's a parameter error, retry without JSON mode
+                if (json.error.message.includes("response_mime_type") || json.error.message.includes("responseMimeType") || json.error.message.includes("Cannot find field")) {
+                  delete body.generationConfig?.response_mime_type;
+                  const retryRes = await fetch(url, { method: 'POST', body: JSON.stringify(body) });
+                  const retryJson = await retryRes.json();
+                  if (!retryJson.error) return retryJson.candidates?.[0]?.content?.parts?.[0]?.text;
+                }
                 if ((json.error.message.includes("not found") || json.error.status === "INVALID_ARGUMENT") && v === 'v1') continue;
                 throw new Error(json.error.message);
               }
@@ -477,25 +494,32 @@ const App = () => {
           }
         } catch (e) { console.error('Error parseando PDF localmente:', e); }
 
-        if (docText.trim().length > 20) {
+        if (docText.trim().length > 10) {
+          console.log("Texto extraído del PDF:", docText.substring(0, 300) + "...");
           // PDF con texto: cualquier IA lo puede procesar
-          const textPrompt = `Eres un asistente financiero de pensión alimenticia. Analiza el siguiente texto extraído de un reporte de pensión y extrae TODOS los movimientos financieros.\n\nTEXTO DEL REPORTE:\n${docText}\n\nDevuelve EXCLUSIVAMENTE este JSON sin texto adicional:\n{"base":5408.00,"totalFinal":5408.00,"aiReport":"Resumen del mes","expenses":[{"name":"CONCEPTO MAYUSCULAS","amount":100.00,"paidBy":"haidar","responsibility":"shared","installments":1}]}\nResponsabilidad: shared=50/50, kenny=solo kenny, haidar=haidar pagó por kenny, por_pagar=depósito directo.`;
+          const textPrompt = `Eres un asistente financiero. Analiza el siguiente texto de un REPORTE DE PENSIÓN y extrae los movimientos financieros.\n\nTEXTO:\n${docText}\n\nDevuelve SOLO este JSON:\n{"base":0,"totalFinal":0,"aiReport":"...","expenses":[{"name":"...","amount":0,"paidBy":"haidar","responsibility":"shared"}]}`;
           const { text: aiText, model } = await callAiFailover({ prompt: textPrompt });
+          console.log("Respuesta de IA para texto:", aiText);
+
           const jsonMatch = aiText.replace(/```json|```/gi, '').match(/\{[\s\S]*\}/);
-          if (!jsonMatch) throw new Error(`Sin JSON: ${aiText.substring(0, 150)}`);
-          const parsed = JSON.parse(jsonMatch[0]);
-          if (!Array.isArray(parsed.expenses) || !parsed.expenses.length) throw new Error('No se encontraron movimientos');
-          const ts = Date.now();
-          const newExpenses = parsed.expenses.map((ex, i) => ({ ...calculateImpact({ ...ex, id: `ai-${ts}-${i}` }), id: `ai-${ts}-${i}` }));
-          const existingList = viewingHistorical ? JSON.parse(viewingHistorical.expenses || '[]') : [];
-          const finalList = [...existingList.filter(x => x.isMetadata), ...newExpenses];
-          const histId = `hist-${year}-${month}`;
-          const histRow = { id: histId, month, year, timestamp: ts, amount: parsed.totalFinal || currentBase, aiReport: parsed.aiReport || `Pensión ${meses[month]} ${year}`, expenses: JSON.stringify(finalList), baseUsed: parsed.base || currentBase };
-          setHistory(prev => { const ex = prev.some(h => h.id === histId); return ex ? prev.map(h => h.id === histId ? histRow : h) : [histRow, ...prev]; });
-          setAiReport(histRow.aiReport);
-          supabase.from('history').upsert(histRow).then(({ error }) => { if (!error) notify(`✓ ${newExpenses.length} movimientos registrados vía ${model}`); });
-          return;
-        } else {
+          if (jsonMatch) {
+            const parsed = JSON.parse(jsonMatch[0]);
+            if (Array.isArray(parsed.expenses) && parsed.expenses.length > 0) {
+              const ts = Date.now();
+              const newExpenses = parsed.expenses.map((ex, i) => ({ ...calculateImpact({ ...ex, id: `ai-${ts}-${i}` }), id: `ai-${ts}-${i}` }));
+              const existingList = viewingHistorical ? JSON.parse(viewingHistorical.expenses || '[]') : [];
+              const finalList = [...existingList.filter(x => x.isMetadata), ...newExpenses];
+              const histId = `hist-${year}-${month}`;
+              const histRow = { id: histId, month, year, timestamp: ts, amount: parsed.totalFinal || currentBase, aiReport: parsed.aiReport || `Pensión ${meses[month]} ${year}`, expenses: JSON.stringify(finalList), baseUsed: parsed.base || currentBase };
+              setHistory(prev => { const ex = prev.some(h => h.id === histId); return ex ? prev.map(h => h.id === histId ? histRow : h) : [histRow, ...prev]; });
+              setAiReport(histRow.aiReport);
+              supabase.from('history').upsert(histRow).then(({ error }) => { if (!error) notify(`✓ Reporte procesado vía ${model}`); });
+              return;
+            }
+          }
+          console.warn("IA no encontró gastos en el texto, intentando vía visión...");
+        }
+        else {
           // PDF escaneado sin texto → usar vision de Gemini
           const dataUrl = await new Promise((res, rej) => { const r = new FileReader(); r.onloadend = () => res(r.result); r.onerror = rej; r.readAsDataURL(file); });
           imageBase64 = dataUrl.split(',')[1];
