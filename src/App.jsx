@@ -79,12 +79,20 @@ const HistoryItem = ({ h, meses, fmt, onEdit, onSaveAmount }) => {
 };
 
 const App = () => {
-  // --- 1. ESTADOS PRINCIPALES ---
+  // --- HELPER: leer localStorage una sola vez de forma síncrona ---
+  const readLocal = () => {
+    try {
+      const s = localStorage.getItem(STORAGE.DATA);
+      return s ? JSON.parse(s) : { history: [], expenses: [], manualBase: 5408 };
+    } catch { return { history: [], expenses: [], manualBase: 5408 }; }
+  };
+
+  // --- 1. ESTADOS PRINCIPALES (lazy init desde localStorage) ---
   const [year, setYear] = useState(new Date().getFullYear());
   const [month, setMonth] = useState(new Date().getMonth());
-  const [expenses, setExpenses] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [manualBase, setManualBase] = useState(5408);
+  const [expenses, setExpenses] = useState(() => { const d = readLocal(); return Array.isArray(d.expenses) ? d.expenses : []; });
+  const [history, setHistory] = useState(() => { const d = readLocal(); return Array.isArray(d.history) ? d.history.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)) : []; });
+  const [manualBase, setManualBase] = useState(() => { const d = readLocal(); return d.manualBase || 5408; });
   const [keys, setKeys] = useState({
     gemini: localStorage.getItem(STORAGE.GEMINI) || "",
     groq: localStorage.getItem(STORAGE.GROQ) || "",
