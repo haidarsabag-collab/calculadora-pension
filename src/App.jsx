@@ -263,13 +263,18 @@ const App = () => {
         await loadSupabaseData();
         isInitialized.current = true;
 
-        // Auto-navegar al mes siguiente al último mes con Reporte Final Consolidado (aiReport no vacío)
-        // Usamos el estado actualizado post-Supabase leyendo desde localStorage que ya actualizó loadSupabaseData
-        const merged = readLocal();
-        const finalized = (merged.history || []).filter(h => h && h.aiReport && h.aiReport.trim().length > 10);
+        // Forzar estado desde localStorage (esto garantiza que móvil u otro dispositivo sin caché vea los datos de Supabase)
+        const postSync = readLocal();
+        if (Array.isArray(postSync.history) && postSync.history.length > 0) {
+          setHistory(postSync.history.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
+        }
+        if (Array.isArray(postSync.expenses) && postSync.expenses.length > 0) {
+          setExpenses(postSync.expenses);
+        }
+
+        // Auto-navegar al mes siguiente al último mes con Reporte Final Consolidado
+        const finalized = (postSync.history || []).filter(h => h && h.aiReport && h.aiReport.trim().length > 10);
         if (finalized.length > 0) {
-          const currentYear = new Date().getFullYear();
-          const currentMonth = new Date().getMonth();
           const sorted = [...finalized].sort((a, b) =>
             b.year !== a.year ? b.year - a.year : b.month - a.month
           );
@@ -277,12 +282,11 @@ const App = () => {
           let nextMonth = last.month + 1;
           let nextYear = last.year;
           if (nextMonth > 11) { nextMonth = 0; nextYear++; }
-          // Solo navegar si el mes calculado es pasado o actual (no futuro)
-          if (nextYear < currentYear || (nextYear === currentYear && nextMonth <= currentMonth)) {
-            setMonth(nextMonth);
-            setYear(nextYear);
-          }
+          // Navegar siempre al siguiente mes pendiente (sin importar si es futuro)
+          setMonth(nextMonth);
+          setYear(nextYear);
         }
+
       } catch (e) { console.error("Error init", e); }
     };
     init();
