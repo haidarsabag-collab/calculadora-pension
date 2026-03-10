@@ -334,27 +334,18 @@ const App = () => {
                 }]
               };
 
-              // Correct parameter name for REST API is response_mime_type (snake_case)
-              if (!imageBase64) {
-                body.generationConfig = {
-                  response_mime_type: "application/json",
-                  temperature: 0.1
-                };
-              } else {
-                body.generationConfig = { temperature: 0.1 };
-              }
+              // Avoid using picky JSON mode parameters, rely on prompt instructions for better compatibility
+              body.generationConfig = {
+                temperature: 0.1,
+                topP: 0.95,
+                topK: 40,
+                maxOutputTokens: 2048
+              };
 
               const res = await fetch(url, { method: 'POST', body: JSON.stringify(body) });
               const json = await res.json();
               if (json.error) {
                 console.error(`Gemini Error (${v}):`, json.error);
-                // If it's a parameter error, retry without JSON mode
-                if (json.error.message.includes("response_mime_type") || json.error.message.includes("responseMimeType") || json.error.message.includes("Cannot find field")) {
-                  delete body.generationConfig?.response_mime_type;
-                  const retryRes = await fetch(url, { method: 'POST', body: JSON.stringify(body) });
-                  const retryJson = await retryRes.json();
-                  if (!retryJson.error) return retryJson.candidates?.[0]?.content?.parts?.[0]?.text;
-                }
                 if ((json.error.message.includes("not found") || json.error.status === "INVALID_ARGUMENT") && v === 'v1') continue;
                 throw new Error(json.error.message);
               }
@@ -497,7 +488,18 @@ const App = () => {
         if (docText.trim().length > 10) {
           console.log("Texto extraído del PDF:", docText.substring(0, 300) + "...");
           // PDF con texto: cualquier IA lo puede procesar
-          const textPrompt = `Eres un asistente financiero. Analiza el siguiente texto de un REPORTE DE PENSIÓN y extrae los movimientos financieros.\n\nTEXTO:\n${docText}\n\nDevuelve SOLO este JSON:\n{"base":0,"totalFinal":0,"aiReport":"...","expenses":[{"name":"...","amount":0,"paidBy":"haidar","responsibility":"shared"}]}`;
+          const textPrompt = `Eres un asistente financiero experto. Analiza el siguiente texto de un REPORTE DE PENSIÓN y extrae los movimientos financieros.
+
+TEXTO:
+${docText}
+
+REGLAS DE NEGOCIO:
+1. "paidBy" DEBE ser exclusivamente 'haidar' o 'kenny'.
+2. "responsibility" DEBE ser 'shared' (50/50), 'haidar' (100% Haidar), 'kenny' (100% Kenny) o 'por_pagar' (Depósito directo).
+3. Si el monto detectado es el pago base de la pensión, ponlo en "base" y NO lo incluyas en "expenses".
+
+Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
+{"base":0,"totalFinal":0,"aiReport":"Resumen corto","expenses":[{"name":"NOMBRE","amount":0,"paidBy":"haidar","responsibility":"shared"}]}`;
           const { text: aiText, model } = await callAiFailover({ prompt: textPrompt });
           console.log("Respuesta de IA para texto:", aiText);
 
@@ -506,7 +508,15 @@ const App = () => {
             const parsed = JSON.parse(jsonMatch[0]);
             if (Array.isArray(parsed.expenses) && parsed.expenses.length > 0) {
               const ts = Date.now();
-              const newExpenses = parsed.expenses.map((ex, i) => ({ ...calculateImpact({ ...ex, id: `ai-${ts}-${i}` }), id: `ai-${ts}-${i}` }));
+              const newExpenses = parsed.expenses.map((ex, i) => {
+                // SANITIZACIÓN DE DATOS IA
+                let rb = (ex.responsibility || 'shared').toLowerCase();
+                if (!['shared', 'haidar', 'kenny', 'por_pagar'].includes(rb)) rb = 'shared';
+                let pb = (ex.paidBy || 'haidar').toLowerCase();
+                if (!['haidar', 'kenny'].includes(pb)) pb = 'haidar';
+
+                return { ...calculateImpact({ ...ex, responsibility: rb, paidBy: pb, id: `ai-${ts}-${i}` }), id: `ai-${ts}-${i}` };
+              });
               const existingList = viewingHistorical ? JSON.parse(viewingHistorical.expenses || '[]') : [];
               const finalList = [...existingList.filter(x => x.isMetadata), ...newExpenses];
               const histId = `hist-${year}-${month}`;
