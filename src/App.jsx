@@ -361,7 +361,7 @@ const App = () => {
         await analyzePdfForHistory({ target: { files: [file] } });
       } else if (type === 'cep') {
         metaObj.cepData = b64;
-        setCepAttached(b64);
+        setCepData({ base64: b64, type: file.type, name: file.name });
       }
     }
 
@@ -429,11 +429,11 @@ const App = () => {
     if (viewingHistorical) {
       setAiReport(viewingHistorical.aiReport || "");
       setTempTotalManual("");
-      setCepAttached(null);
+      setCepData(null);
     } else {
       setAiReport("");
       setTempTotalManual("");
-      setCepAttached(null);
+      setCepData(null);
     }
   }, [month, year, viewingHistorical]);
 
