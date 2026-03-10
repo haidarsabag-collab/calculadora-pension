@@ -263,20 +263,21 @@ const App = () => {
         await loadSupabaseData();
         isInitialized.current = true;
 
-        // Auto-navegar al mes siguiente al último finalizado
-        const localData = readLocal();
-        if (Array.isArray(localData.history) && localData.history.length > 0) {
+        // Auto-navegar al mes siguiente al último mes con Reporte Final Consolidado (aiReport no vacío)
+        // Usamos el estado actualizado post-Supabase leyendo desde localStorage que ya actualizó loadSupabaseData
+        const merged = readLocal();
+        const finalized = (merged.history || []).filter(h => h && h.aiReport && h.aiReport.trim().length > 10);
+        if (finalized.length > 0) {
           const currentYear = new Date().getFullYear();
           const currentMonth = new Date().getMonth();
-          // Ordenar por año y mes descendente para encontrar el último
-          const sorted = [...localData.history].sort((a, b) =>
+          const sorted = [...finalized].sort((a, b) =>
             b.year !== a.year ? b.year - a.year : b.month - a.month
           );
           const last = sorted[0];
           let nextMonth = last.month + 1;
           let nextYear = last.year;
           if (nextMonth > 11) { nextMonth = 0; nextYear++; }
-          // Solo navegar si no estamos ya en el mes actual o futuro
+          // Solo navegar si el mes calculado es pasado o actual (no futuro)
           if (nextYear < currentYear || (nextYear === currentYear && nextMonth <= currentMonth)) {
             setMonth(nextMonth);
             setYear(nextYear);
