@@ -154,6 +154,7 @@ const App = () => {
   const [tempTotalManual, setTempTotalManual] = useState("");
 
   const galleryInputRef = useRef();
+  const ticketsInputRef = useRef();
   const cepInputRef = useRef();
   const textareaRef = useRef(null);
   const formRef = useRef(null);
@@ -554,33 +555,9 @@ const App = () => {
       const mimeType = file.type || "image/jpeg";
       const prompt = "Analiza este ticket. Responde SOLO JSON plano: {\"name\": \"...\", \"amount\": 00.00}";
 
-      // 1. Guardar adjunto inmediatamente en metadata local/nube
-      if (viewingHistorical) {
-        let list = JSON.parse(viewingHistorical.expenses || "[]");
-        let metaIdx = list.findIndex(x => x.isMetadata);
-        let metaObj = metaIdx >= 0 ? list[metaIdx] : { isMetadata: true };
-        metaObj.ticketsData = metaObj.ticketsData || [];
-        metaObj.ticketsData.push({ name: file.name, data: base64Str, type: mimeType });
-        if (metaIdx >= 0) list[metaIdx] = metaObj; else list.unshift(metaObj);
+      notify("Escaneando datos del ticket...", "info");
 
-        const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list), timestamp: Date.now() };
-        setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
-        const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
-        localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
-
-        const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
-        supabase.from('history').upsert(cleanHist).catch(console.error);
-      } else {
-        setPendingMetadata(m => {
-          const mObj = m || { isMetadata: true };
-          if (!mObj.ticketsData) mObj.ticketsData = [];
-          mObj.ticketsData.push({ name: file.name, data: base64Str, type: mimeType });
-          return { ...mObj };
-        });
-      }
-      notify("Adjuntando ticket visualmente...", "info");
-
-      // 2. Extraer datos con IA para el formulario
+      // Extraer datos con IA para el formulario
       try {
         const { text, model } = await callAiFailover({ prompt, imageBase64: base64Data, mimeType });
         const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -1407,7 +1384,7 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
           </button>
         </div>
 
-        {/* Acciones del mes: CEP + Ticket Scan (disponible siempre) */}
+        {/* Acciones del mes: CEP + Notas (disponibles siempre) */}
         <div className="flex gap-3 px-2 mt-4">
           <button onClick={() => cepInputRef.current.click()}
             className={`flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${(historicalMetadata?.cepData || cepData)
@@ -1417,10 +1394,10 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
             <Paperclip className="w-4 h-4" />
             {(historicalMetadata?.cepData || cepData) ? 'CEP Adjunto ✓' : 'Adjuntar CEP'}
           </button>
-          {/* Ticket scan - disponible siempre incluyendo máses históricos */}
-          <button onClick={() => galleryInputRef.current.click()}
+          {/* Adjuntar múltiples tickets pero solo para el PDF, sin analizar con IA */}
+          <button onClick={() => ticketsInputRef.current.click()}
             className="flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all bg-white text-slate-400 border-slate-200 shadow-sm hover:bg-slate-50">
-            <ImageIcon className="w-4 h-4" /> Escanear Ticket
+            <ImageIcon className="w-4 h-4" /> Adjuntar Notas (PDF)
           </button>
         </div>
         {/* Previsualización del CEP adjunto */}
@@ -1563,44 +1540,8 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
 
       {/* INPUTS OCULTOS */}
       <input type="file" ref={galleryInputRef} accept="image/*" capture="environment" className="hidden" onChange={handleImageScan} />
-      <input type="file" ref={cepInputRef} accept="image/*,application/pdf" className="hidden" onChange={async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-        const reader = new FileReader();
-        reader.onload = async (ev) => {
-          const base64 = ev.target.result;
-          if (viewingHistorical) {
-            // Guardar en el mes histórico pero dentro de metadata
-            let list = JSON.parse(viewingHistorical.expenses || "[]");
-            let metaIdx = list.findIndex(x => x.isMetadata);
-            if (metaIdx >= 0) {
-              list[metaIdx].cepData = base64;
-              list[metaIdx].cepName = file.name;
-            } else {
-              list.unshift({ isMetadata: true, cepData: base64, cepName: file.name });
-            }
-            const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list), timestamp: Date.now() };
-
-            setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
-            const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
-            localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
-
-            const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
-            const { error } = await supabase.from('history').upsert(cleanHist);
-
-            notify(error ? 'Error al guardar CEP: ' + error.message : '✓ CEP guardado en ' + (meses[viewingHistorical.month] || 'el mes'));
-          } else {
-            // Guardar en pendingMetadata para el mes activo
-            setPendingMetadata(m => ({ ...(m || { isMetadata: true }), cepData: base64, cepName: file.name }));
-            // Y también en el estado local UI de preview
-            setCepData({ base64, type: file.type, name: file.name });
-            notify('✓ CEP adjuntado para este periodo');
-          }
-        };
-        reader.readAsDataURL(file);
-        e.target.value = '';
-      }} />
-
+      <input type="file" ref={ticketsInputRef} accept="image/*" multiple className="hidden" onChange={(e) => handleAttachment(e, 'tickets')} />
+      <input type="file" ref={cepInputRef} accept="image/*" className="hidden" onChange={(e) => handleAttachment(e, 'cep')} />
       {/* MODAL CONFIGURACIÓN API KEY */}
       {showConfig && (
         <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[2000] flex items-center justify-center p-4">
