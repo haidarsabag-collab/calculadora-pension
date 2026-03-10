@@ -33,6 +33,51 @@ const loadScript = (src) => {
   });
 };
 
+// Componente para editar monto directamente en el historial
+const HistoryItem = ({ h, meses, fmt, onEdit, onSaveAmount }) => {
+  const [editing, setEditing] = React.useState(false);
+  const [val, setVal] = React.useState(String(h.amount));
+
+  return (
+    <div className="p-5 border border-slate-100 rounded-[28px] hover:bg-amber-50/50 transition-all">
+      <div className="flex justify-between items-center">
+        <div>
+          <p className="text-[9px] font-black text-slate-400">{h.year}</p>
+          <h4 className="font-black text-sm uppercase text-slate-700">{meses[h.month] || "MES"}</h4>
+          {!editing && <p className="text-[11px] font-black text-blue-600">{fmt(h.amount)}</p>}
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={() => { setEditing(!editing); setVal(String(h.amount)); }}
+            className="p-2 bg-slate-100 text-slate-500 rounded-xl hover:bg-slate-200 transition-all text-[9px] font-black uppercase">
+            {editing ? "Cancelar" : "$ Editar"}
+          </button>
+          <button onClick={onEdit}
+            className="p-2 bg-amber-500 text-white rounded-xl hover:bg-amber-600 transition-all text-[9px] font-black uppercase shadow-md">
+            + Desglose
+          </button>
+        </div>
+      </div>
+      {editing && (
+        <div className="mt-3 flex items-center gap-2">
+          <span className="text-slate-400 font-black text-sm">$</span>
+          <input
+            type="number"
+            value={val}
+            onChange={e => setVal(e.target.value)}
+            className="flex-1 border border-blue-300 rounded-xl px-3 py-2 text-sm font-bold text-blue-700 outline-none focus:border-blue-500"
+            placeholder="Nuevo monto..."
+            autoFocus
+          />
+          <button onClick={async () => { await onSaveAmount(val); setEditing(false); }}
+            className="px-4 py-2 bg-green-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-green-700 transition-all">
+            Guardar
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const App = () => {
   // --- 1. ESTADOS PRINCIPALES ---
   const [year, setYear] = useState(new Date().getFullYear());
@@ -1243,7 +1288,7 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
         <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[2000] flex items-center justify-center p-4">
           <div className="bg-white w-full max-w-sm rounded-[44px] shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
             <div className="p-8 border-b flex justify-between bg-slate-50">
-              <h3 className="font-black text-xs uppercase text-slate-500">Historial Local</h3>
+              <h3 className="font-black text-xs uppercase text-slate-500">Historial de Meses</h3>
               <button onClick={() => setShowHistory(false)}><X className="w-5 h-5" /></button>
             </div>
             <div className="p-6 overflow-y-auto space-y-3 flex-1 custom-scroll">
@@ -1254,20 +1299,17 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
                 </div>
               ) : (
                 (history || []).map(h => h && (
-                  <div key={h.id} className="p-5 border border-slate-100 rounded-[28px] flex justify-between items-center hover:bg-amber-50/50 transition-all group">
-                    <div>
-                      <p className="text-[9px] font-black text-slate-400">{h.year}</p>
-                      <h4 className="font-black text-sm uppercase text-slate-700 flex items-center gap-1">
-                        {meses[h.month] || "MES"} {(h.expenses?.includes('isMetadata')) && <Paperclip className="w-3 h-3 text-green-500" />}
-                      </h4>
-                      <p className="text-[9px] text-slate-400 font-bold">{fmt(h.amount)}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={() => { setMonth(h.month); setYear(h.year); setIsEditingHistorical(true); setShowHistory(false); }} className="p-3 bg-amber-500 text-white rounded-2xl hover:bg-amber-600 transition-all flex items-center gap-2 text-[9px] font-black uppercase shadow-md">
-                        <Pencil className="w-4 h-4" /> Editar
-                      </button>
-                    </div>
-                  </div>
+                  <HistoryItem key={h.id} h={h} meses={meses} fmt={fmt}
+                    onEdit={() => { setMonth(h.month); setYear(h.year); setIsEditingHistorical(true); setShowHistory(false); }}
+                    onSaveAmount={async (newAmount) => {
+                      const updated = { ...h, amount: parseFloat(newAmount), timestamp: Date.now() };
+                      setHistory(prev => prev.map(x => x.id === h.id ? updated : x));
+                      const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+                      localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(x => x.id === h.id ? updated : x) }));
+                      const { error } = await supabase.from('history').upsert(updated);
+                      notify(error ? 'Error al guardar en nube' : `✓ ${meses[h.month]} actualizado a ${fmt(parseFloat(newAmount))}`);
+                    }}
+                  />
                 ))
               )}
             </div>
