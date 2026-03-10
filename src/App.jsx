@@ -555,9 +555,34 @@ const App = () => {
       const mimeType = file.type || "image/jpeg";
       const prompt = "Analiza este ticket. Responde SOLO JSON plano: {\"name\": \"...\", \"amount\": 00.00}";
 
+      // 1. Guardar adjunto inmediatamente en metadata local/nube para agregarlo al PDF
+      if (viewingHistorical) {
+        let list = JSON.parse(viewingHistorical.expenses || "[]");
+        let metaIdx = list.findIndex(x => x.isMetadata);
+        let metaObj = metaIdx >= 0 ? list[metaIdx] : { isMetadata: true };
+        metaObj.ticketsData = metaObj.ticketsData || [];
+        metaObj.ticketsData.push({ name: file.name, data: base64Str, type: mimeType });
+        if (metaIdx >= 0) list[metaIdx] = metaObj; else list.unshift(metaObj);
+
+        const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list), timestamp: Date.now() };
+        setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
+        const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+        localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
+
+        const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
+        supabase.from('history').upsert(cleanHist).catch(console.error);
+      } else {
+        setPendingMetadata(m => {
+          const mObj = m || { isMetadata: true };
+          if (!mObj.ticketsData) mObj.ticketsData = [];
+          mObj.ticketsData.push({ name: file.name, data: base64Str, type: mimeType });
+          return { ...mObj };
+        });
+      }
+
       notify("Escaneando datos del ticket...", "info");
 
-      // Extraer datos con IA para el formulario
+      // 2. Extraer datos con IA para el formulario
       try {
         const { text, model } = await callAiFailover({ prompt, imageBase64: base64Data, mimeType });
         const jsonMatch = text.match(/\{[\s\S]*\}/);
@@ -570,10 +595,10 @@ const App = () => {
           amount: String(parsed.amount || ""),
           imageData: base64Str
         }));
-        notify(`✓ Escaneado con ${model}`);
+        notify(`✓ Escaneado con ${model} y adjuntado visualmente`);
       } catch (err) {
         console.error("Scan Error:", err);
-        notify("La IA no pudo leer los datos del ticket. Puedes llenarlos manual.", "warning");
+        notify("La IA no pudo leer los datos del ticket. Puedes llenarlos manual. Ticket se adjuntó.", "warning");
       } finally {
         setIsScanning(false);
         target.value = '';
