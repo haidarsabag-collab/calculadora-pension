@@ -840,117 +840,10 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
     }
   };
 
-  const generatePDF = async () => {
-    if (!libsReady) return;
-    notify("Generando Reporte PDF...");
-    const { jsPDF } = window.jspdf;
-    const doc = new jsPDF();
-
-    doc.setFontSize(18); doc.setTextColor(26, 115, 232);
-    doc.text("ESTADO DE CUENTA - PENSIÓN ALIMENTICIA", 20, 20);
-    doc.setFontSize(10); doc.setTextColor(100);
-    doc.text(`${meses[month]} ${year}`, 20, 28);
-    doc.setFontSize(10); doc.setTextColor(0);
-    doc.setFont("courier", "normal");
-    doc.text(doc.splitTextToSize(aiReport, 170), 20, 45);
-    doc.setFontSize(14); doc.setFont("helvetica", "bold");
-    doc.text(`DEPÓSITO FINAL: ${fmt(totalFinal)}`, 20, 210);
-
-    const { PDFDocument } = window.PDFLib;
-    const mainPdfBytes = doc.output('arraybuffer');
-    let finalPdf = await PDFDocument.load(mainPdfBytes);
-
-    let meta = pendingMetadata || activeAjustes.find(x => x.isMetadata);
-    if (viewingHistorical) meta = JSON.parse(viewingHistorical.expenses || "[]").find(x => x.isMetadata) || meta;
-
-    if (meta && meta.pdfData) {
-      try {
-        const byteString = window.atob(meta.pdfData.split(',')[1]);
-        const ab = new ArrayBuffer(byteString.length);
-        const ia = new Uint8Array(ab);
-        for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-        const repPdf = await PDFDocument.load(ab);
-        const copied = await finalPdf.copyPages(repPdf, repPdf.getPageIndices());
-        copied.forEach(p => finalPdf.addPage(p));
-      } catch (e) { console.error("Error merging PDF report manual", e); }
-    }
-
-    for (const aj of activeAjustes) {
-      if (aj.imageData) {
-        const page = finalPdf.addPage();
-        const { width, height } = page.getSize();
-        try {
-          const imgBuffer = await (await fetch(aj.imageData)).arrayBuffer();
-          const img = aj.imageData.includes('png') ? await finalPdf.embedPng(imgBuffer) : await finalPdf.embedJpg(imgBuffer);
-          const dims = img.scaleToFit(width - 40, height - 100);
-          page.drawText(`EVIDENCIA: ${aj.name}`, { x: 20, y: height - 40, size: 14 });
-          page.drawImage(img, { x: 20, y: height - 60 - dims.height, width: dims.width, height: dims.height });
-        } catch (e) { console.error("PDF Embedding Error", e); }
-      }
-    }
-
-    if (meta && meta.ticketsData) {
-      for (const t of meta.ticketsData) {
-        try {
-          const page = finalPdf.addPage();
-          const { width, height } = page.getSize();
-          const byteString = window.atob(t.data.split(',')[1]);
-          const ab = new ArrayBuffer(byteString.length);
-          const ia = new Uint8Array(ab);
-          for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-          const img = t.type.includes('png') ? await finalPdf.embedPng(ab) : await finalPdf.embedJpg(ab);
-          const dims = img.scaleToFit(width - 40, height - 100);
-          page.drawText(`EVIDENCIA ADJUNTA: ${t.name}`, { x: 20, y: height - 40, size: 14 });
-          page.drawImage(img, { x: 20, y: height - 60 - dims.height, width: dims.width, height: dims.height });
-        } catch (e) { console.error("Error embedding manual ticket", e); }
-      }
-    }
-
-    let cepToProcess = cepAttached;
-    if (meta && meta.cepData && typeof meta.cepData === 'string' && !cepToProcess) {
-      try {
-        const byteString = window.atob(meta.cepData.split(',')[1]);
-        const mimeStr = meta.cepData.split(',')[0].split(':')[1].split(';')[0];
-        const ab = new ArrayBuffer(byteString.length);
-        const ia = new Uint8Array(ab);
-        for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
-        cepToProcess = new Blob([ab], { type: mimeStr });
-      } catch (e) { console.error("Error reconstr cep", e); }
-    }
-
-    if (cepToProcess && cepToProcess instanceof Blob) {
-      try {
-        const cepBuffer = await cepToProcess.arrayBuffer();
-        if (cepToProcess.type === 'application/pdf') {
-          const cepPdf = await PDFDocument.load(cepBuffer);
-          const copied = await finalPdf.copyPages(cepPdf, cepPdf.getPageIndices());
-          copied.forEach(p => finalPdf.addPage(p));
-        } else {
-          const page = finalPdf.addPage();
-          const img = cepToProcess.type === 'image/png' ? await finalPdf.embedPng(cepBuffer) : await finalPdf.embedJpg(cepBuffer);
-          const { width, height } = page.getSize();
-          const dims = img.scaleToFit(width - 40, height - 100);
-          page.drawImage(img, { x: 20, y: height - 60 - dims.height, width: dims.width, height: dims.height });
-        }
-      } catch (e) { console.error("Error embed cep", e); }
-    }
-
-    const pdfOutput = await finalPdf.save();
-    const fileName = `PENSION_HADI_${meses[month]}_${year}.pdf`;
-
-    // Log para el bot/usuario para guardar en carpeta project
-    console.log(`%c [REPORTE GENERADO] Copia este comando para guardar en tu carpeta reports:`, 'background: #222; color: #bada55');
-    console.log(`cat << 'EOF' | base64 -d > "/Users/haidar/Organized/Profesional/Calculadora_Pension/reports/${fileName}"\n${doc.output('datauristring').split(',')[1]}\nEOF`);
-
-    downloadBlob(new Blob([pdfOutput], { type: 'application/pdf' }), fileName);
-    notify("Reporte generado. Revisa la consola para guardarlo en la carpeta reports.");
+  const copyReport = () => {
+    navigator.clipboard.writeText(aiReport).then(() => notify('✓ Resumen copiado al portapapeles'));
   };
 
-  const downloadBlob = (blob, name) => {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = name; a.click();
-    URL.revokeObjectURL(url);
-  };
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#202124] font-sans pb-20 selection:bg-blue-100">
@@ -1351,8 +1244,8 @@ Escribe el resumen en español, con el desglose de cada concepto y el total fina
               <CheckCircle2 className="w-6 h-6" /> {viewingHistorical ? "Guardar Cambios" : "Finalizar Periodo"}
             </button>
           ) : <div />}
-          <button onClick={generatePDF} className={`w-full flex items-center justify-center gap-3 py-5 bg-[#1A73E8] text-white rounded-3xl font-black text-xs uppercase shadow-xl hover:bg-blue-700 transition-all ${viewingHistorical && !isEditingHistorical ? 'col-span-1 sm:col-span-2' : ''}`}>
-            <Printer className="w-5 h-5" /> {viewingHistorical ? 'REGENERAR REPORTE DEL MES Y DESCARGAR' : 'GENERAR REPORTE Y DESCARGAR'}
+          <button onClick={copyReport} className={`w-full flex items-center justify-center gap-3 py-5 bg-[#1A73E8] text-white rounded-3xl font-black text-xs uppercase shadow-xl hover:bg-blue-700 transition-all ${viewingHistorical && !isEditingHistorical ? 'col-span-1 sm:col-span-2' : ''}`}>
+            <Download className="w-5 h-5" /> Copiar Resumen al Portapapeles
           </button>
         </div>
 
@@ -1367,11 +1260,11 @@ Escribe el resumen en español, con el desglose de cada concepto y el total fina
           </button>
         </div>
 
-        {/* ACCIONES FINALES LATERALES */}
+        {/* Ticket scan rápido cuando se añade un gasto */}
         {(!viewingHistorical || isEditingHistorical) && (
           <div className="flex gap-4 px-2 mt-4">
-            <button onClick={() => cepInputRef.current.click()} className={`flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${cepAttached ? 'bg-green-50 text-green-700 border-green-200' : 'bg-white text-slate-400 border-slate-200 shadow-sm'}`}>
-              <Paperclip className="w-4 h-4" /> {viewingHistorical ? 'Vincular DOC A HISTORIAL' : (cepAttached ? 'CEP Vinculado ✓' : 'Adjuntar Documento CEP')}
+            <button onClick={() => galleryInputRef.current.click()} className="flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all bg-white text-slate-400 border-slate-200 shadow-sm hover:bg-slate-50">
+              <ImageIcon className="w-4 h-4" /> Escanear Ticket / Foto
             </button>
           </div>
         )}
@@ -1420,12 +1313,8 @@ Escribe el resumen en español, con el desglose de cada concepto y el total fina
         </div>
       )}
 
-      {/* INPUTS INVISIBLES DE EVIDENCIA */}
-      <input type="file" ref={manualPdfRef} accept="application/pdf" className="hidden" onChange={(e) => handleAttachment(e, 'pdf')} />
-      <input type="file" ref={manualTicketsRef} accept="image/*" multiple className="hidden" onChange={(e) => handleAttachment(e, 'tickets')} />
+      {/* INPUT OCULTO: Solo scan de tickets con foto */}
       <input type="file" ref={galleryInputRef} accept="image/*" capture="environment" className="hidden" onChange={handleImageScan} />
-      <input type="file" ref={cepInputRef} accept="image/*,application/pdf" className="hidden" onChange={(e) => handleAttachment(e, 'cep')} />
-      <input type="file" ref={pdfAnalysisInputRef} accept="image/*,application/pdf" className="hidden" onChange={analyzePdfForHistory} />
 
       {/* MODAL CONFIGURACIÓN API KEY */}
       {showConfig && (
