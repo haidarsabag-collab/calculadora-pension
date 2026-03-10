@@ -1422,7 +1422,7 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
           {/* Adjuntar múltiples tickets pero solo para el PDF, sin analizar con IA */}
           <button onClick={() => ticketsInputRef.current.click()}
             className="flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all bg-white text-slate-400 border-slate-200 shadow-sm hover:bg-slate-50">
-            <ImageIcon className="w-4 h-4" /> Adjuntar Notas (PDF)
+            <ImageIcon className="w-4 h-4" /> Adjuntar Archivos para PDF
           </button>
         </div>
         {/* Previsualización del CEP adjunto */}
