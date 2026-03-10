@@ -141,6 +141,16 @@ const App = () => {
   }, []);
 
   useEffect(() => {
+    // Inject pdf.js for browser-side PDF parsing
+    if (!window.pdfjsLib) {
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+      script.onload = () => {
+        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      };
+      document.head.appendChild(script);
+    }
+
     try {
       localStorage.setItem(STORAGE.DATA, JSON.stringify({ expenses, history, manualBase }));
     } catch (e) {
@@ -307,26 +317,33 @@ const App = () => {
       {
         provider: 'GEMINI',
         key: keys.gemini,
-        models: ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-2.0-flash', 'gemini-1.5-pro'],
+        models: ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-pro'],
         call: async (key, model) => {
-          // Try v1 first, if it fails with 'not found', try v1beta
           const versions = ['v1', 'v1beta'];
           for (const v of versions) {
             try {
+              console.log(`Intentando GEMINI ${v} con ${model}...`);
               const url = `https://generativelanguage.googleapis.com/${v}/models/${model}:generateContent?key=${key}`;
-              const res = await fetch(url, {
-                method: 'POST',
-                body: JSON.stringify({
-                  contents: [{ parts: [{ text: prompt }, ...(imageBase64 ? [{ inlineData: { mimeType, data: imageBase64 } }] : [])] }],
-                  generationConfig: { responseMimeType: "application/json" }
-                })
-              });
+
+              const body = {
+                contents: [{ parts: [{ text: prompt }, ...(imageBase64 ? [{ inlineData: { mimeType, data: imageBase64 } }] : [])] }]
+              };
+
+              // Only add JSON mode if we are not sending an image/pdf (sometimes is picky)
+              if (!imageBase64) {
+                body.generationConfig = { responseMimeType: "application/json" };
+              }
+
+              const res = await fetch(url, { method: 'POST', body: JSON.stringify(body) });
               const json = await res.json();
               if (json.error) {
-                if (json.error.message.includes("not found") && v === 'v1') continue;
+                console.error(`Gemini Error (${v}):`, json.error);
+                if ((json.error.message.includes("not found") || json.error.status === "INVALID_ARGUMENT") && v === 'v1') continue;
                 throw new Error(json.error.message);
               }
-              return json.candidates?.[0]?.content?.parts?.[0]?.text;
+              const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+              if (!text) throw new Error("Respuesta vacía de Gemini");
+              return text;
             } catch (e) {
               if (v === 'v1') continue;
               throw e;
@@ -492,8 +509,13 @@ const App = () => {
       }
 
       // Vision para imágenes y PDFs escaneados (USANDO FAILOVER AUTO)
-      const visionPrompt = `Analiza este documento de pensión y extrae todos los movimientos. Devuelve SOLO JSON:\n{"base":5408.00,"totalFinal":5408.00,"aiReport":"Resumen","expenses":[{"name":"CONCEPTO","amount":100.00,"paidBy":"haidar","responsibility":"shared","installments":1}]}`;
+      const visionPrompt = `Analiza este documento de pensión y extrae todos los movimientos. Devuelve SOLO JSON:\n{"base":5408.00,"totalFinal":5408.00,"aiReport":"Resumen de movimientos","expenses":[{"name":"CONCEPTO","amount":100.00,"paidBy":"haidar","responsibility":"shared","installments":1}]}`;
       let responseText, usedModel;
+
+      // RESTRICTION: Other engines (Groq/OpenRouter) usually don't support PDF via vision, only Gemini does.
+      if (mimeType === 'application/pdf' && !keys.gemini) {
+        throw new Error("Para leer PDFs visualmente necesitas configurar la llave de Gemini en ⚙️. Otros motores solo soportan imágenes.");
+      }
 
       const res = await callAiFailover({ prompt: visionPrompt, imageBase64, mimeType });
       responseText = res.text;
