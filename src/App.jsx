@@ -1105,35 +1105,61 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
               <h4 className="text-[10px] font-black uppercase tracking-widest">Resumen Desglosado </h4>
             </div>
             <div className="flex items-center gap-2">
-              {viewingHistorical && (
-                <button onClick={async () => {
-                  // Regenerar narrativa desde los datos históricos almacenados
-                  notify("Regenerando resumen con IA...");
-                  try {
-                    const hist = viewingHistorical;
-                    let exps = [];
-                    try { exps = JSON.parse(hist.expenses || '[]'); } catch { }
-                    const prompt = `Redacta un resumen claro y formal del estado de cuenta de la pensón alimenticia de Kenney para ${meses[hist.month]} ${hist.year}.
-Base mensual: ${fmt(hist.baseUsed || 5408)}.
-Movimientos: ${JSON.stringify(exps.filter(e => !e.isMetadata).map(e => ({ concepto: e.name, impacto: e.monthlyImpact, pago: e.paidBy, responsabilidad: e.responsibility })))}
-Total depositado: ${fmt(hist.amount)}.
-Escribe el resumen en español, con el desglose de cada concepto y el total final. Incluye cómo se calculó cada ajuste. Sé claro, formal y concreto.`;
-                    const { text } = await callAiFailover({ prompt });
-                    setAiReport(text);
-                    // Guardar en historial
-                    const updatedHist = { ...hist, aiReport: text, timestamp: Date.now() };
-                    setHistory(prev => prev.map(h => h.id === hist.id ? updatedHist : h));
-                    const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
-                    localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === hist.id ? updatedHist : h) }));
-                    await supabase.from('history').upsert(updatedHist);
-                    notify('✓ Resumen regenerado y guardado');
-                  } catch (err) {
-                    notify('Error con IA: ' + err.message, 'error');
+              <button onClick={async () => {
+                // Regenerar narrativa directamente desde los datos (formato garantizado)
+                notify("Generando resumen...");
+                try {
+                  const hist = viewingHistorical;
+                  let exps = [];
+                  try { exps = JSON.parse(hist.expenses || '[]'); } catch { }
+                  const gastos = exps.filter(e => !e.isMetadata);
+                  const suman = gastos.filter(e => e.monthlyImpact > 0);
+                  const restan = gastos.filter(e => e.monthlyImpact < 0);
+                  const mesNombre = meses[hist.month]?.toUpperCase() || '';
+
+                  // Construir formato base directamente (sin IA)
+                  let texto = `ESTADO DE CUENTA - PENSIÓN ${mesNombre} ${hist.year}\n`;
+                  texto += `==================================================\n\n`;
+                  texto += `(+) BASE MENSUAL FIJA: ${fmt(hist.baseUsed || 5408)}\n\n`;
+
+                  if (suman.length > 0) {
+                    texto += `CONCEPTOS QUE SUMAN AL PAGO (+)\n`;
+                    texto += `--------------------------------------------------\n`;
+                    suman.forEach(s => {
+                      texto += `• ${s.name}: +${fmt(s.monthlyImpact)} (${s.responsibility === 'shared' ? `Es el 50% de ${fmt(s.originalAmount)}` : 'Adeudo directo'})\n`;
+                    });
+                    texto += `\n`;
                   }
-                }} className="px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-full text-[8px] font-black uppercase hover:bg-indigo-200 transition-all flex items-center gap-1">
-                  <BrainCircuit className="w-3 h-3" /> Regenerar con IA
-                </button>
-              )}
+
+                  if (restan.length > 0) {
+                    texto += `CONCEPTOS QUE RESTAN AL PAGO (-)\n`;
+                    texto += `--------------------------------------------------\n`;
+                    restan.forEach(r => {
+                      texto += `• ${r.name}: -${fmt(Math.abs(r.monthlyImpact))} (${r.responsibility === 'shared' ? `Ya cubrí tu 50% de ${fmt(r.originalAmount)}` : 'Cubierto totalmente por mí'})\n`;
+                    });
+                    texto += `\n`;
+                  }
+
+                  texto += `==================================================\n`;
+                  texto += `TOTAL FINAL A DEPOSITAR: ${fmt(hist.amount)}\n`;
+                  texto += `==================================================\n\n`;
+                  texto += `Nota: Se adjuntan comprobantes visuales al final de este reporte.\n\n`;
+                  texto += `Saludos, Haidar Sabag.`;
+
+                  setAiReport(texto);
+                  // Guardar en historial
+                  const updatedHist = { ...hist, aiReport: texto, timestamp: Date.now() };
+                  setHistory(prev => prev.map(h => h.id === hist.id ? updatedHist : h));
+                  const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+                  localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === hist.id ? updatedHist : h) }));
+                  await supabase.from('history').upsert(updatedHist);
+                  notify('✓ Resumen regenerado y guardado');
+                } catch (err) {
+                  notify('Error: ' + err.message, 'error');
+                }
+              }} className="px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-full text-[8px] font-black uppercase hover:bg-indigo-200 transition-all flex items-center gap-1">
+                <BrainCircuit className="w-3 h-3" /> Regenerar con IA
+              </button>
               <div className="flex items-center gap-2 bg-blue-50 px-3 py-1.5 rounded-full">
                 <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
                 <span className="text-[8px] font-black uppercase text-blue-600 tracking-widest">Inteligencia Activa</span>
