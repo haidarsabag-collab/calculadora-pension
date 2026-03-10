@@ -127,6 +127,17 @@ const App = () => {
     } catch { return { history: [], expenses: [], manualBase: 5408, pendingMetadata: null }; }
   };
 
+  // --- HELPER: Descarga imperativa sin colapsar el Virtual DOM con Base64 masivos ---
+  const triggerDownload = (data, name) => {
+    if (!data) return;
+    const link = document.createElement('a');
+    link.href = data;
+    link.download = name || "archivo.jpg";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   // --- 1. ESTADOS PRINCIPALES (lazy init desde localStorage) ---
   const [year, setYear] = useState(new Date().getFullYear());
   const [month, setMonth] = useState(new Date().getMonth());
@@ -594,7 +605,7 @@ const App = () => {
       // Smart compression para evitar 'Payload Too Large' con fotos del celular
       if (base64Str.length > 1500000) {
         try {
-          base64Str = await new Promise((res) => {
+          base64Str = await new Promise((res, rej) => {
             const img = new Image();
             img.onload = () => {
               const maxDim = 1200;
@@ -609,6 +620,7 @@ const App = () => {
               ctx.drawImage(img, 0, 0, w, h);
               res(canvas.toDataURL(file.type || 'image/jpeg', 0.8));
             };
+            img.onerror = () => rej(new Error("No se pudo comprimir la imagen localmente."));
             img.src = reader.result;
           });
         } catch (err) { console.warn("Fallback de compresión de imagen ignorado", err); }
@@ -1505,10 +1517,10 @@ INSTRUCCIONES CLAVE:
                 </div>
               </div>
               <div className="flex gap-2">
-                <a href={historicalMetadata?.cepData || cepData?.base64} download={(historicalMetadata?.cepName || cepData?.name) || 'CEP.jpg'}
+                <button onClick={() => triggerDownload(historicalMetadata?.cepData || cepData?.base64, (historicalMetadata?.cepName || cepData?.name) || 'CEP.jpg')}
                   className="px-3 py-1.5 bg-green-600 text-white rounded-xl text-[9px] font-black uppercase hover:bg-green-700 transition-all">
                   Descargar
-                </a>
+                </button>
                 <button onClick={async () => {
                   if (viewingHistorical) {
                     let list = JSON.parse(viewingHistorical.expenses || "[]");
@@ -1550,10 +1562,10 @@ INSTRUCCIONES CLAVE:
                   </div>
                 </div>
                 <div className="flex gap-2 shrink-0 ml-2">
-                  <a href={ticket.data} download={ticket.name || `Ticket_${idx + 1}.jpg`}
+                  <button onClick={() => triggerDownload(ticket.data, ticket.name || `Ticket_${idx + 1}.jpg`)}
                     className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-xl text-[9px] font-black uppercase hover:bg-slate-300 transition-all">
                     Descargar
-                  </a>
+                  </button>
                   <button onClick={async () => {
                     if (viewingHistorical) {
                       let list = JSON.parse(viewingHistorical.expenses || "[]");
