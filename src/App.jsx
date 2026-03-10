@@ -1523,23 +1523,14 @@ INSTRUCCIONES CLAVE:
           </button>
         </div>
 
-        {/* ACCIÓN DE SINCRONIZACIÓN Y GUARDADO FORZADO */}
-        <div className="grid grid-cols-2 gap-2 px-2 mt-4">
-          <button onClick={() => {
-            notify("Guardando estado en la bóveda de la nube...");
-            if (pendingMetadata) {
-              const metaRow = { id: 'draft-meta', month: new Date().getMonth(), year: new Date().getFullYear(), amount: 0, expenses: JSON.stringify([{ ...pendingMetadata, timestamp: Date.now() }]), timestamp: Date.now() };
-              supabase.from('history').upsert(metaRow).then(() => notify("✓ Archivos guardados en tu nube personal", "success"));
-            } else { notify("✓ Estado local guardado", "success"); }
-          }} className="w-full flex items-center justify-center gap-2 py-3 bg-indigo-50 text-indigo-700 rounded-2xl text-[10px] font-black uppercase hover:bg-indigo-100 transition-all border border-indigo-200">
-            <Save className="w-4 h-4" /> Guardar Archivos
-          </button>
+        {/* ACCIÓN DE SINCRONIZACIÓN FORZADA */}
+        <div className="px-2 mt-4">
           <button onClick={async () => {
-            notify("Sincronizando bóveda...");
+            notify("Forzando sincronización completa...");
             await loadSupabaseData();
             notify("✓ Datos actualizados desde la nube", "success");
           }} className="w-full flex items-center justify-center gap-2 py-3 bg-slate-100 text-slate-500 rounded-2xl text-[10px] font-black uppercase hover:bg-slate-200 transition-all border border-slate-200">
-            <RefreshCw className="w-4 h-4" /> Bóveda Nube
+            <RefreshCw className="w-4 h-4" /> Forzar Sincronización con la Nube
           </button>
         </div>
 
