@@ -213,57 +213,32 @@ const App = () => {
     }
   };
 
+  // --- useEffect A: Sincronización de datos (corre INMEDIATAMENTE, sin esperar scripts) ---
   useEffect(() => {
-    const init = async () => {
+    const syncData = async () => {
       try {
-        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
-        await loadScript('https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js');
-        // PDF.js para lectura/extracción de texto de PDFs
-        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.mjs');
-        if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.mjs';
-        setLibsReady(true);
-
+        // Migración v25 → v31 si existe
         const savedV25 = localStorage.getItem("pension_hadi_offline_data_v25");
         const savedV31 = localStorage.getItem(STORAGE.DATA);
-
-        // MIGRACIÓN AGRESIVA: Si hay datos en v25 y v31 está vacío o incompleto, mezclar.
         if (savedV25) {
           try {
             const data25 = JSON.parse(savedV25);
             let data31 = savedV31 ? JSON.parse(savedV31) : { history: [], expenses: [] };
-
-            // Mezclar historiales si no existen en v31
             if (Array.isArray(data25.history)) {
-              data25.history.forEach(h => {
-                if (!data31.history.some(h31 => h31.id === h.id)) {
-                  data31.history.push(h);
-                }
-              });
+              data25.history.forEach(h => { if (!data31.history.some(h31 => h31.id === h.id)) data31.history.push(h); });
             }
             if (Array.isArray(data25.expenses)) {
-              data25.expenses.forEach(e => {
-                if (!data31.expenses.some(e31 => e31.id === e.id)) {
-                  data31.expenses.push(e);
-                }
-              });
+              data25.expenses.forEach(e => { if (!data31.expenses.some(e31 => e31.id === e.id)) data31.expenses.push(e); });
             }
             localStorage.setItem(STORAGE.DATA, JSON.stringify(data31));
-            setHistory(data31.history);
-            setExpenses(data31.expenses);
-            if (data25.manualBase) setManualBase(data25.manualBase);
-            notify("✓ Datos antiguos migrados a v31", "success");
           } catch (e) { console.error("Migration error", e); }
-        } else if (savedV31) {
-          const d = JSON.parse(savedV31);
-          if (Array.isArray(d.expenses)) setExpenses(d.expenses);
-          if (Array.isArray(d.history)) setHistory(d.history);
-          if (d.manualBase) setManualBase(d.manualBase);
         }
 
+        // Sincronizar con Supabase (siempre, sin importar si hay scripts cargados)
         await loadSupabaseData();
         isInitialized.current = true;
 
-        // Forzar estado desde localStorage (esto garantiza que móvil u otro dispositivo sin caché vea los datos de Supabase)
+        // Forzar estado desde localStorage post-Supabase (garantiza sync en móvil/incógnito)
         const postSync = readLocal();
         if (Array.isArray(postSync.history) && postSync.history.length > 0) {
           setHistory(postSync.history.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
@@ -275,21 +250,31 @@ const App = () => {
         // Auto-navegar al mes siguiente al último mes con Reporte Final Consolidado
         const finalized = (postSync.history || []).filter(h => h && h.aiReport && h.aiReport.trim().length > 10);
         if (finalized.length > 0) {
-          const sorted = [...finalized].sort((a, b) =>
-            b.year !== a.year ? b.year - a.year : b.month - a.month
-          );
+          const sorted = [...finalized].sort((a, b) => b.year !== a.year ? b.year - a.year : b.month - a.month);
           const last = sorted[0];
           let nextMonth = last.month + 1;
           let nextYear = last.year;
           if (nextMonth > 11) { nextMonth = 0; nextYear++; }
-          // Navegar siempre al siguiente mes pendiente (sin importar si es futuro)
           setMonth(nextMonth);
           setYear(nextYear);
         }
-
-      } catch (e) { console.error("Error init", e); }
+      } catch (e) { console.error("Error syncData", e); }
     };
-    init();
+    syncData();
+  }, []);
+
+  // --- useEffect B: Carga de scripts PDF (corre en paralelo, no bloquea datos) ---
+  useEffect(() => {
+    const loadLibs = async () => {
+      try {
+        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js');
+        await loadScript('https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js');
+        await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.mjs');
+        if (window.pdfjsLib) window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.mjs';
+        setLibsReady(true);
+      } catch (e) { console.warn("Scripts PDF no cargaron:", e); setLibsReady(false); }
+    };
+    loadLibs();
   }, []);
 
   useEffect(() => {
