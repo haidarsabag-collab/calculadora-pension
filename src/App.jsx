@@ -837,8 +837,9 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
     }
   };
 
-  const generatePDF = () => {
+  const generatePDF = async () => {
     try {
+      notify("Generando reporte completo...", "info");
       const { jsPDF } = window.jspdf;
       if (!jsPDF) { notify('Librería PDF cargando, intenta en 5 segundos', 'error'); return; }
       const doc = new jsPDF();
@@ -846,21 +847,92 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
       const yr = viewingHistorical ? viewingHistorical.year : year;
       const reportText = aiReport || generatedNarrative;
       const total = viewingHistorical ? viewingHistorical.amount : totalFinal;
+      const meta = viewingHistorical ? historicalMetadata : pendingMetadata;
 
       doc.setFontSize(16); doc.setTextColor(26, 115, 232);
-      doc.text(`ESTADO DE CUENTA - PENSÓN ALIMENTICIA`, 20, 20);
+      doc.text(`ESTADO DE CUENTA - PENSIÓN ALIMENTICIA`, 20, 20);
       doc.setFontSize(11); doc.setTextColor(100);
-      doc.text(`${monthName} ${yr}`, 20, 30);
+      doc.text(`${monthName.toUpperCase()} ${yr}`, 20, 30);
       doc.setFontSize(9); doc.setTextColor(0);
       doc.setFont('courier', 'normal');
       const lines = doc.splitTextToSize(reportText, 170);
       doc.text(lines, 20, 44);
-      const yFinal = Math.min(44 + lines.length * 4.5, 265);
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(26, 115, 232);
-      doc.text(`TOTAL DEPOSITADO: ${fmt(total)}`, 20, yFinal + 10);
+      let yFinal = 44 + lines.length * 4.5;
 
-      doc.save(`PENSION_${monthName}_${yr}.pdf`);
-      notify('✓ PDF generado y descargado');
+      // Resumen de archivos
+      let filesSummary = [];
+      if (meta?.cepName || meta?.cepData) filesSummary.push(`• Comprobante de Pago (CEP): ${meta?.cepName || 'Adjunto'}`);
+      if (meta?.ticketsData?.length > 0) filesSummary.push(`• Notas / Tickets: ${meta.ticketsData.length} archivo(s) escaneado(s) adjunto(s)`);
+      if (meta?.pdfData) filesSummary.push(`• Reporte Base: PDF original cargado`);
+
+      if (filesSummary.length > 0) {
+        yFinal += 10;
+        if (yFinal > 250) { doc.addPage(); yFinal = 20; }
+        doc.setFont('helvetica', 'bold');
+        doc.text("RESUMEN DE ARCHIVOS LOCALES GUARDADOS:", 20, yFinal);
+        doc.setFont('courier', 'normal');
+        yFinal += 6;
+        filesSummary.forEach(f => {
+          doc.text(f, 20, yFinal);
+          yFinal += 5;
+        });
+      }
+
+      yFinal += 10;
+      if (yFinal > 270) { doc.addPage(); yFinal = 20; }
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(26, 115, 232);
+      doc.text(`TOTAL DEPOSITADO: ${fmt(total)}`, 20, yFinal);
+
+      // Inclusión visual de anexos
+      const addImageToDoc = async (base64, name) => {
+        if (!base64 || base64.includes('application/pdf')) return;
+        return new Promise((resolve) => {
+          const img = new Image();
+          img.onload = () => {
+            doc.addPage();
+            doc.setFontSize(12); doc.setTextColor(100);
+            doc.setFont('helvetica', 'normal');
+            doc.text(`Anexo: ${name}`, 20, 20);
+
+            const imgWidth = 170;
+            const imgHeight = (img.height * imgWidth) / img.width;
+
+            let finalW = imgWidth;
+            let finalH = imgHeight;
+            if (finalH > 250) {
+              finalH = 250;
+              finalW = (img.width * finalH) / img.height;
+            }
+
+            const x = 20 + (170 - finalW) / 2;
+
+            try {
+              let format = 'JPEG';
+              if (base64.includes('image/png')) format = 'PNG';
+              else if (base64.includes('image/webp')) format = 'WEBP';
+              doc.addImage(base64, format, x, 30, finalW, finalH);
+            } catch (e) {
+              console.error("Error al incrustar imagen en PDF", e);
+            }
+            resolve();
+          };
+          img.onerror = resolve;
+          img.src = base64;
+        });
+      };
+
+      if (meta?.cepData) {
+        await addImageToDoc(meta.cepData, meta.cepName || 'CEP');
+      }
+
+      if (meta?.ticketsData) {
+        for (const t of meta.ticketsData) {
+          await addImageToDoc(t.data, t.name || 'Nota_Ticket');
+        }
+      }
+
+      doc.save(`PENSION_${monthName.toUpperCase()}_${yr}.pdf`);
+      notify('✓ Reporte generado con anexos incluidos');
     } catch (e) { notify('Error generando PDF: ' + e.message, 'error'); }
   };
 
