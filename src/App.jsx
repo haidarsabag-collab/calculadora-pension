@@ -291,6 +291,13 @@ const App = () => {
     return (history || []).find(h => h && h.month === month && h.year === year) || null;
   }, [history, month, year]);
 
+  const historicalMetadata = useMemo(() => {
+    if (!viewingHistorical) return null;
+    try {
+      return JSON.parse(viewingHistorical.expenses || "[]").find(x => x.isMetadata) || null;
+    } catch { return null; }
+  }, [viewingHistorical]);
+
   const currentBase = useMemo(() => {
     if (viewingHistorical) return Number(viewingHistorical.baseUsed) || 5408;
     const diffYears = year - 2026;
@@ -781,9 +788,7 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
       id, month, year, amount: totalFinal, aiReport,
       expenses: JSON.stringify(finalExpensesList),
       baseUsed: currentBase,
-      timestamp: Date.now(),
-      // Incluir CEP si se adjuntó durante el período
-      ...(cepData ? { cepData: cepData.base64, cepName: cepData.name } : {})
+      timestamp: Date.now()
     };
 
     const nextExpenses = expenses.map(ex => ({ ...ex, installments: Math.max(1, ex.installments - 1) })).filter(ex => ex.installments > 0 || ex.responsibility === 'por_pagar');
@@ -791,6 +796,9 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
     // 1. Actualización inmediata y local (Cache first)
     setHistory(prev => [histRow, ...prev.filter(x => x.id !== id)]);
     setExpenses(nextExpenses);
+    setCepData(null);
+    setPendingMetadata(null);
+    setTempTotalManual("");
 
     // Forzar guardado en localStorage antes de que ocurra cualquier refresh
     const currentStorage = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{"history":[]}');
@@ -1282,12 +1290,12 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
         {/* Acciones del mes: CEP + Ticket Scan (disponible siempre) */}
         <div className="flex gap-3 px-2 mt-4">
           <button onClick={() => cepInputRef.current.click()}
-            className={`flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${(viewingHistorical?.cepData || cepData)
+            className={`flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${(historicalMetadata?.cepData || cepData)
               ? 'bg-green-50 text-green-700 border-green-300'
               : 'bg-white text-slate-400 border-slate-200 shadow-sm hover:bg-slate-50'
               }`}>
             <Paperclip className="w-4 h-4" />
-            {(viewingHistorical?.cepData || cepData) ? 'CEP Adjunto ✓' : 'Adjuntar CEP'}
+            {(historicalMetadata?.cepData || cepData) ? 'CEP Adjunto ✓' : 'Adjuntar CEP'}
           </button>
           {/* Ticket scan - disponible siempre incluyendo máses históricos */}
           <button onClick={() => galleryInputRef.current.click()}
@@ -1296,24 +1304,30 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
           </button>
         </div>
         {/* Previsualización del CEP adjunto */}
-        {(viewingHistorical?.cepData || cepData) && (
+        {(historicalMetadata?.cepData || cepData) && (
           <div className="px-2 mt-3">
             <div className="bg-green-50 border border-green-200 rounded-2xl p-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <FileImage className="w-8 h-8 text-green-600" />
                 <div>
                   <p className="text-[10px] font-black text-green-800 uppercase">CEP Adjunto</p>
-                  <p className="text-[9px] text-green-600">{(viewingHistorical?.cepName || cepData?.name) || 'comprobante.jpg'}</p>
+                  <p className="text-[9px] text-green-600">{(historicalMetadata?.cepName || cepData?.name) || 'comprobante.jpg'}</p>
                 </div>
               </div>
               <div className="flex gap-2">
-                <a href={viewingHistorical?.cepData || cepData?.base64} download={(viewingHistorical?.cepName || cepData?.name) || 'CEP.jpg'}
+                <a href={historicalMetadata?.cepData || cepData?.base64} download={(historicalMetadata?.cepName || cepData?.name) || 'CEP.jpg'}
                   className="px-3 py-1.5 bg-green-600 text-white rounded-xl text-[9px] font-black uppercase hover:bg-green-700 transition-all">
                   Descargar
                 </a>
                 <button onClick={async () => {
                   if (viewingHistorical) {
-                    const updatedHist = { ...viewingHistorical, cepData: null, cepName: null, timestamp: Date.now() };
+                    let list = JSON.parse(viewingHistorical.expenses || "[]");
+                    let metaIdx = list.findIndex(x => x.isMetadata);
+                    if (metaIdx >= 0) {
+                      list[metaIdx].cepData = null;
+                      list[metaIdx].cepName = null;
+                    }
+                    const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list), timestamp: Date.now() };
                     setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
                     const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
                     localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
@@ -1381,17 +1395,28 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
         reader.onload = async (ev) => {
           const base64 = ev.target.result;
           if (viewingHistorical) {
-            // Guardar directamente en el mes histórico
-            const updatedHist = { ...viewingHistorical, cepData: base64, cepName: file.name, timestamp: Date.now() };
+            // Guardar en el mes histórico pero dentro de metadata
+            let list = JSON.parse(viewingHistorical.expenses || "[]");
+            let metaIdx = list.findIndex(x => x.isMetadata);
+            if (metaIdx >= 0) {
+              list[metaIdx].cepData = base64;
+              list[metaIdx].cepName = file.name;
+            } else {
+              list.unshift({ isMetadata: true, cepData: base64, cepName: file.name });
+            }
+            const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list), timestamp: Date.now() };
+
             setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
             const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
             localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
             const { error } = await supabase.from('history').upsert(updatedHist);
             notify(error ? 'Error al guardar CEP: ' + error.message : '✓ CEP guardado en ' + (meses[viewingHistorical.month] || 'el mes'));
           } else {
-            // Guardar en el estado del mes actual (se incluirá al Finalizar Periodo)
+            // Guardar en pendingMetadata para el mes activo
+            setPendingMetadata(m => ({ ...(m || { isMetadata: true }), cepData: base64, cepName: file.name }));
+            // Y también en el estado local UI de preview
             setCepData({ base64, type: file.type, name: file.name });
-            notify('✓ CEP listo para adjuntar al finalizar el período');
+            notify('✓ CEP adjuntado para este periodo');
           }
         };
         reader.readAsDataURL(file);
