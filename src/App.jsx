@@ -1003,17 +1003,14 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
           const img = new Image();
           img.onload = () => {
             doc.addPage();
-            doc.setFontSize(12); doc.setTextColor(100);
-            doc.setFont('helvetica', 'normal');
-            doc.text(`Anexo: ${name}`, 20, 20);
 
             const imgWidth = 170;
             const imgHeight = (img.height * imgWidth) / img.width;
 
             let finalW = imgWidth;
             let finalH = imgHeight;
-            if (finalH > 250) {
-              finalH = 250;
+            if (finalH > 260) {
+              finalH = 260;
               finalW = (img.width * finalH) / img.height;
             }
 
@@ -1023,7 +1020,7 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
               let format = 'JPEG';
               if (base64.includes('image/png')) format = 'PNG';
               else if (base64.includes('image/webp')) format = 'WEBP';
-              doc.addImage(base64, format, x, 30, finalW, finalH);
+              doc.addImage(base64, format, x, 20, finalW, finalH);
             } catch (e) {
               console.error("Error al incrustar imagen en PDF", e);
             }
