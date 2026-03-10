@@ -1424,9 +1424,10 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
 
                     const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
                     await supabase.from('history').upsert(cleanHist);
-
-                    notify('CEP eliminado');
-                  } else { setCepData(null); }
+                  } else {
+                    setCepData(null);
+                    setPendingMetadata(m => m ? { ...m, cepData: null, cepName: null } : null);
+                  }
                   notify('CEP eliminado');
                 }} className="px-3 py-1.5 bg-red-100 text-red-600 rounded-xl text-[9px] font-black uppercase hover:bg-red-200 transition-all">
                   Quitar
@@ -1435,7 +1436,56 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
             </div>
           </div>
         )}
+
+        {/* Previsualización de Notas / Tickets Adjuntos */}
+        {((viewingHistorical ? historicalMetadata?.ticketsData : pendingMetadata?.ticketsData) || []).length > 0 && (
+          <div className="px-2 mt-3 space-y-2">
+            {((viewingHistorical ? historicalMetadata?.ticketsData : pendingMetadata?.ticketsData) || []).map((ticket, idx) => (
+              <div key={idx} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 flex items-center justify-between">
+                <div className="flex items-center gap-3 overflow-hidden">
+                  <ImageIcon className="w-8 h-8 text-slate-400 shrink-0" />
+                  <div className="truncate">
+                    <p className="text-[10px] font-black text-slate-600 uppercase">Nota / Ticket {idx + 1}</p>
+                    <p className="text-[9px] text-slate-500 truncate">{ticket.name || `imagen_${idx + 1}.jpg`}</p>
+                  </div>
+                </div>
+                <div className="flex gap-2 shrink-0 ml-2">
+                  <a href={ticket.data} download={ticket.name || `Ticket_${idx + 1}.jpg`}
+                    className="px-3 py-1.5 bg-slate-200 text-slate-700 rounded-xl text-[9px] font-black uppercase hover:bg-slate-300 transition-all">
+                    Descargar
+                  </a>
+                  <button onClick={async () => {
+                    if (viewingHistorical) {
+                      let list = JSON.parse(viewingHistorical.expenses || "[]");
+                      let metaIdx = list.findIndex(x => x.isMetadata);
+                      if (metaIdx >= 0 && list[metaIdx].ticketsData) {
+                        list[metaIdx].ticketsData.splice(idx, 1);
+                      }
+                      const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list), timestamp: Date.now() };
+                      setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
+                      const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+                      localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
+
+                      const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
+                      await supabase.from('history').upsert(cleanHist);
+                    } else {
+                      setPendingMetadata(m => {
+                        const nextMeta = { ...m };
+                        if (nextMeta.ticketsData) nextMeta.ticketsData.splice(idx, 1);
+                        return nextMeta;
+                      });
+                    }
+                    notify('Ticket eliminado');
+                  }} className="px-3 py-1.5 bg-red-100 text-red-600 rounded-xl text-[9px] font-black uppercase hover:bg-red-200 transition-all">
+                    Quitar
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
+
 
       {/* MODAL HISTORIAL */}
       {showHistory && (
