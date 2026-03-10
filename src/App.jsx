@@ -145,7 +145,7 @@ const App = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [aiReport, setAiReport] = useState("");
   const [isEditingHistorical, setIsEditingHistorical] = useState(false);
-  const [cepAttached, setCepAttached] = useState(null);
+  const [cepData, setCepData] = useState(null); // {base64, type, name} del CEP adjunto al mes actual
   const [editingId, setEditingId] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [libsReady, setLibsReady] = useState(false);
@@ -154,12 +154,9 @@ const App = () => {
 
   const galleryInputRef = useRef();
   const cepInputRef = useRef();
-  const pdfAnalysisInputRef = useRef();
-  const manualPdfRef = useRef();
-  const manualTicketsRef = useRef();
   const textareaRef = useRef(null);
   const formRef = useRef(null);
-  const isInitialized = useRef(false); // FLAG: impide borrar localStorage antes de que init() cargue los datos
+  const isInitialized = useRef(false);
 
   const [newEx, setNewEx] = useState({
     name: "", amount: "", paidBy: "haidar", responsibility: "shared", installments: 1, date: new Date().toISOString().split('T')[0], imageData: null
@@ -803,7 +800,9 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
       id, month, year, amount: totalFinal, aiReport,
       expenses: JSON.stringify(finalExpensesList),
       baseUsed: currentBase,
-      timestamp: Date.now()
+      timestamp: Date.now(),
+      // Incluir CEP si se adjuntó durante el período
+      ...(cepData ? { cepData: cepData.base64, cepName: cepData.name } : {})
     };
 
     const nextExpenses = expenses.map(ex => ({ ...ex, installments: Math.max(1, ex.installments - 1) })).filter(ex => ex.installments > 0 || ex.responsibility === 'por_pagar');
@@ -1260,12 +1259,55 @@ Escribe el resumen en español, con el desglose de cada concepto y el total fina
           </button>
         </div>
 
-        {/* Ticket scan rápido cuando se añade un gasto */}
-        {(!viewingHistorical || isEditingHistorical) && (
-          <div className="flex gap-4 px-2 mt-4">
-            <button onClick={() => galleryInputRef.current.click()} className="flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all bg-white text-slate-400 border-slate-200 shadow-sm hover:bg-slate-50">
-              <ImageIcon className="w-4 h-4" /> Escanear Ticket / Foto
+        {/* Acciones del mes: CEP + Ticket Scan */}
+        <div className="flex gap-3 px-2 mt-4">
+          {/* Adjuntar / Ver CEP - disponible siempre */}
+          <button onClick={() => cepInputRef.current.click()}
+            className={`flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all ${(viewingHistorical?.cepData || cepData)
+              ? 'bg-green-50 text-green-700 border-green-300'
+              : 'bg-white text-slate-400 border-slate-200 shadow-sm hover:bg-slate-50'
+              }`}>
+            <Paperclip className="w-4 h-4" />
+            {(viewingHistorical?.cepData || cepData) ? 'CEP Adjunto ✓' : 'Adjuntar CEP'}
+          </button>
+          {/* Scan ticket - solo al agregar gastos */}
+          {(!viewingHistorical || isEditingHistorical) && (
+            <button onClick={() => galleryInputRef.current.click()}
+              className="flex-1 py-3 rounded-2xl border text-[10px] font-black uppercase flex items-center justify-center gap-2 transition-all bg-white text-slate-400 border-slate-200 shadow-sm hover:bg-slate-50">
+              <ImageIcon className="w-4 h-4" /> Escanear Ticket
             </button>
+          )}
+        </div>
+        {/* Previsualización del CEP adjunto */}
+        {(viewingHistorical?.cepData || cepData) && (
+          <div className="px-2 mt-3">
+            <div className="bg-green-50 border border-green-200 rounded-2xl p-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <FileImage className="w-8 h-8 text-green-600" />
+                <div>
+                  <p className="text-[10px] font-black text-green-800 uppercase">CEP Adjunto</p>
+                  <p className="text-[9px] text-green-600">{(viewingHistorical?.cepName || cepData?.name) || 'comprobante.jpg'}</p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                <a href={viewingHistorical?.cepData || cepData?.base64} download={(viewingHistorical?.cepName || cepData?.name) || 'CEP.jpg'}
+                  className="px-3 py-1.5 bg-green-600 text-white rounded-xl text-[9px] font-black uppercase hover:bg-green-700 transition-all">
+                  Descargar
+                </a>
+                <button onClick={async () => {
+                  if (viewingHistorical) {
+                    const updatedHist = { ...viewingHistorical, cepData: null, cepName: null, timestamp: Date.now() };
+                    setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
+                    const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+                    localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
+                    await supabase.from('history').upsert(updatedHist);
+                  } else { setCepData(null); }
+                  notify('CEP eliminado');
+                }} className="px-3 py-1.5 bg-red-100 text-red-600 rounded-xl text-[9px] font-black uppercase hover:bg-red-200 transition-all">
+                  Quitar
+                </button>
+              </div>
+            </div>
           </div>
         )}
       </div>
@@ -1313,8 +1355,31 @@ Escribe el resumen en español, con el desglose de cada concepto y el total fina
         </div>
       )}
 
-      {/* INPUT OCULTO: Solo scan de tickets con foto */}
+      {/* INPUTS OCULTOS */}
       <input type="file" ref={galleryInputRef} accept="image/*" capture="environment" className="hidden" onChange={handleImageScan} />
+      <input type="file" ref={cepInputRef} accept="image/*,application/pdf" className="hidden" onChange={async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = async (ev) => {
+          const base64 = ev.target.result;
+          if (viewingHistorical) {
+            // Guardar directamente en el mes histórico
+            const updatedHist = { ...viewingHistorical, cepData: base64, cepName: file.name, timestamp: Date.now() };
+            setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
+            const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+            localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
+            const { error } = await supabase.from('history').upsert(updatedHist);
+            notify(error ? 'Error al guardar CEP: ' + error.message : '✓ CEP guardado en ' + (meses[viewingHistorical.month] || 'el mes'));
+          } else {
+            // Guardar en el estado del mes actual (se incluirá al Finalizar Periodo)
+            setCepData({ base64, type: file.type, name: file.name });
+            notify('✓ CEP listo para adjuntar al finalizar el período');
+          }
+        };
+        reader.readAsDataURL(file);
+        e.target.value = '';
+      }} />
 
       {/* MODAL CONFIGURACIÓN API KEY */}
       {showConfig && (
