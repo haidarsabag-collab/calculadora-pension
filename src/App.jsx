@@ -82,24 +82,47 @@ const App = () => {
   // --- SINCRONIZACIÓN HÍBRIDA (SUPABASE + LOCALSTORAGE) ---
   const loadSupabaseData = async () => {
     try {
-      const { data: expData, error: expError } = await supabase.from('expenses').select('*');
-      if (expError) throw expError;
-      if (expData) setExpenses(expData);
+      const { data: cloudHist, error: hErr } = await supabase.from('history').select('*');
+      if (hErr) throw hErr;
 
-      const { data: histData, error: histError } = await supabase.from('history').select('*').order('timestamp', { ascending: false });
-      if (histError) throw histError;
-      if (histData) setHistory(histData);
+      const { data: cloudExp, error: eErr } = await supabase.from('expenses').select('*');
+      if (eErr) throw eErr;
 
-      // maybeSingle: no lanza error si la tabla config está vacía
-      const { data: confData } = await supabase.from('config').select('base_manual').maybeSingle();
-      if (confData?.base_manual) setManualBase(confData.base_manual);
+      // 1. Obtener lo que hay en local actualmente
+      const saved = localStorage.getItem(STORAGE.DATA);
+      let local = saved ? JSON.parse(saved) : { history: [], expenses: [] };
 
-      if (expData && histData) {
-        localStorage.setItem(STORAGE.DATA, JSON.stringify({ expenses: expData, history: histData, manualBase: confData?.base_manual || 5408 }));
+      // 2. MERGE DE HISTORIAL (El que tenga el timestamp más reciente gana por cada ID)
+      const mergedHistory = [...(cloudHist || [])];
+
+      if (local.history) {
+        local.history.forEach(localItem => {
+          const cloudIdx = mergedHistory.findIndex(c => c.id === localItem.id);
+          if (cloudIdx === -1) {
+            mergedHistory.push(localItem);
+          } else {
+            // Si el local es más nuevo que lo que bajó de la nube, mantenemos el local
+            if ((localItem.timestamp || 0) > (mergedHistory[cloudIdx].timestamp || 0)) {
+              mergedHistory[cloudIdx] = localItem;
+            }
+          }
+        });
       }
+
+      // 3. Sincronizar estados de React
+      setHistory(mergedHistory.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
+      if (cloudExp) setExpenses(cloudExp);
+
+      // 4. Actualizar LocalStorage con la verdad mezclada
+      localStorage.setItem(STORAGE.DATA, JSON.stringify({
+        ...local,
+        history: mergedHistory,
+        expenses: cloudExp || local.expenses
+      }));
+
     } catch (error) {
-      console.error("Supabase Offline", error);
-      notify("Modo Offline Activado (Caché v31)", "error");
+      console.error("Supabase Sync Error:", error);
+      notify("Trabajando en modo local (Error de red)", "error");
     }
   };
 
@@ -434,11 +457,20 @@ const App = () => {
 
       try {
         const { text, model } = await callAiFailover({ prompt, imageBase64: base64Data, mimeType });
-        const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
-        setNewEx(prev => ({ ...prev, name: String(parsed.name || "").toUpperCase(), amount: String(parsed.amount || ""), imageData: reader.result }));
-        notify(`Escaneado vía ${model}`);
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) throw new Error("No se detectó JSON");
+
+        const parsed = JSON.parse(jsonMatch[0].replace(/```json|```/g, "").trim());
+        setNewEx(prev => ({
+          ...prev,
+          name: String(parsed.name || "Gasto Escaneado").toUpperCase(),
+          amount: String(parsed.amount || ""),
+          imageData: reader.result
+        }));
+        notify(`✓ Escaneado con ${model}`);
       } catch (err) {
-        notify("Cámara/IA falló. Captura manual.", "error");
+        console.error("Scan Error:", err);
+        notify("La IA no pudo leer el ticket claramente.", "error");
       } finally {
         setIsScanning(false);
       }
@@ -659,28 +691,45 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
       else finalExpensesList.unshift(pendingMetadata);
     }
 
-    const histRow = { id, month, year, amount: totalFinal, aiReport, expenses: JSON.stringify(finalExpensesList), baseUsed: currentBase, timestamp: Date.now() };
+    const histRow = {
+      id, month, year, amount: totalFinal, aiReport,
+      expenses: JSON.stringify(finalExpensesList),
+      baseUsed: currentBase,
+      timestamp: Date.now()
+    };
+
     const nextExpenses = expenses.map(ex => ({ ...ex, installments: Math.max(1, ex.installments - 1) })).filter(ex => ex.installments > 0 || ex.responsibility === 'por_pagar');
 
-    // Update Local State Optimista
-    if (history.some(h => h.id === id)) {
-      setHistory(h => h.filter(x => x.id !== id));
-    }
-    setHistory(prev => [histRow, ...prev]);
+    // 1. Actualización inmediata y local (Cache first)
+    setHistory(prev => [histRow, ...prev.filter(x => x.id !== id)]);
     setExpenses(nextExpenses);
-    notify("Periodo archivado. Sincronizando...");
 
-    // Sync History Supabase
-    supabase.from('history').upsert(histRow).then(({ error: histError }) => {
-      if (histError) console.error(histError);
-    });
+    // Forzar guardado en localStorage antes de que ocurra cualquier refresh
+    const currentStorage = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{"history":[]}');
+    localStorage.setItem(STORAGE.DATA, JSON.stringify({
+      ...currentStorage,
+      history: [histRow, ...(currentStorage.history || []).filter(h => h.id !== id)],
+      expenses: nextExpenses
+    }));
 
-    // Sync Expenses Supabase
-    supabase.from('expenses').delete().neq('id', '0').then(async () => {
+    notify("Guardado local ✓. Sincronizando nube...");
+
+    // 2. Sincronización con Supabase (Background)
+    try {
+      const { error: hErr } = await supabase.from('history').upsert(histRow);
+      if (hErr) throw hErr;
+
+      // Limpiar gastos actuales y subir los nuevos (ajustados por mensualidad)
+      await supabase.from('expenses').delete().neq('id', '0');
       if (nextExpenses.length > 0) {
-        await supabase.from('expenses').insert(nextExpenses);
+        const { error: eErr } = await supabase.from('expenses').insert(nextExpenses);
+        if (eErr) throw eErr;
       }
-    });
+      notify("✓ Nube sincronizada", "success");
+    } catch (err) {
+      console.error("Cloud Sync Error:", err);
+      notify("Guardado en este dispositivo (Sin conexión a nube)", "warning");
+    }
   };
 
   const generatePDF = async () => {
@@ -779,8 +828,14 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
     }
 
     const pdfOutput = await finalPdf.save();
-    downloadBlob(new Blob([pdfOutput], { type: 'application/pdf' }), `PENSION_HADI_${meses[month]}_${year}.pdf`);
-    notify("Reporte descargado exitosamente");
+    const fileName = `PENSION_HADI_${meses[month]}_${year}.pdf`;
+
+    // Log para el bot/usuario para guardar en carpeta project
+    console.log(`%c [REPORTE GENERADO] Copia este comando para guardar en tu carpeta reports:`, 'background: #222; color: #bada55');
+    console.log(`cat << 'EOF' | base64 -d > "/Users/haidar/Organized/Profesional/Calculadora_Pension/reports/${fileName}"\n${doc.output('datauristring').split(',')[1]}\nEOF`);
+
+    downloadBlob(new Blob([pdfOutput], { type: 'application/pdf' }), fileName);
+    notify("Reporte generado. Revisa la consola para guardarlo en la carpeta reports.");
   };
 
   const downloadBlob = (blob, name) => {

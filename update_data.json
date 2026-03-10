@@ -1,0 +1,32 @@
+[
+    {
+        "id": "hist-2026-0",
+        "month": 0,
+        "year": 2026,
+        "amount": 5043.33,
+        "baseUsed": 5408,
+        "timestamp": 1773087220000,
+        "aiReport": "Buenas noches, Kenny. De las medicinas fueron $2,188.06 en total que yo puse. De tu parte corresponderían $1,094.03 dividido entre 3 meses para restar a las pensiones serían $364.67 por mes tomando en cuenta lo que me comentaste hoy. Entonces, el incremento a la pensión de este año corresponde a $5,408 por mes, menos los $364.67 del primer descuento de las medicinas queda un total de $5,043. Adjunto comprobante de transferencia por esa cantidad.",
+        "expenses": "[{\"name\": \"DEDUCCIÓN MEDICINAS (CUOTA 1/3)\", \"amount\": 1094.03, \"monthlyImpact\": -364.67, \"paidBy\": \"haidar\", \"responsibility\": \"kenny\", \"id\": \"jan-med-1\"}]"
+    },
+    {
+        "id": "hist-2026-1",
+        "month": 1,
+        "year": 2026,
+        "amount": 5441.15,
+        "baseUsed": 5408,
+        "timestamp": 1773087221000,
+        "aiReport": "Febrero 2026: Liquidación de medicamentos (cuota 2/3) y reembolsos de papelería y salud por Kenny.",
+        "expenses": "[{\"name\": \"Lápiz/Sacapuntas\", \"amount\": 30, \"monthlyImpact\": 30, \"paidBy\": \"kenny\", \"responsibility\": \"haidar\", \"id\": \"feb-1\"}, {\"name\": \"Vick 44\", \"amount\": 191, \"monthlyImpact\": 95.5, \"paidBy\": \"kenny\", \"responsibility\": \"shared\", \"id\": \"feb-2\"}, {\"name\": \"Vannair\", \"amount\": 1274, \"monthlyImpact\": 637, \"paidBy\": \"kenny\", \"responsibility\": \"shared\", \"id\": \"feb-3\"}, {\"name\": \"Medicamentos (CUOTAS 2/3)\", \"amount\": 1094.03, \"monthlyImpact\": -729.35, \"paidBy\": \"haidar\", \"responsibility\": \"kenny\", \"id\": \"feb-4\"}]"
+    },
+    {
+        "id": "hist-2026-2",
+        "month": 2,
+        "year": 2026,
+        "amount": 7103.50,
+        "baseUsed": 5408,
+        "timestamp": 1773087222000,
+        "aiReport": "Marzo 2026: Pensión base más reembolsos por Taekwondo ($1,201.50) y Costco Bioleven/Impresiones ($494, Kenny pagó).",
+        "expenses": "[{\"name\": \"Taekwondo\", \"amount\": 1201.5, \"monthlyImpact\": 1201.5, \"paidBy\": \"kenny\", \"responsibility\": \"haidar\", \"id\": \"mar-1\"}, {\"name\": \"Impresiones Color\", \"amount\": 95, \"monthlyImpact\": 95, \"paidBy\": \"kenny\", \"responsibility\": \"haidar\", \"id\": \"mar-2\"}, {\"name\": \"Costco Bioleven\", \"amount\": 399, \"monthlyImpact\": 399, \"paidBy\": \"kenny\", \"responsibility\": \"haidar\", \"id\": \"mar-3\"}]"
+    }
+]
