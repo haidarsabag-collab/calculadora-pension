@@ -123,8 +123,8 @@ const App = () => {
   const readLocal = () => {
     try {
       const s = localStorage.getItem(STORAGE.DATA);
-      return s ? JSON.parse(s) : { history: [], expenses: [], manualBase: 5408 };
-    } catch { return { history: [], expenses: [], manualBase: 5408 }; }
+      return s ? JSON.parse(s) : { history: [], expenses: [], manualBase: 5408, pendingMetadata: null };
+    } catch { return { history: [], expenses: [], manualBase: 5408, pendingMetadata: null }; }
   };
 
   // --- 1. ESTADOS PRINCIPALES (lazy init desde localStorage) ---
@@ -146,11 +146,14 @@ const App = () => {
   const [isScanning, setIsScanning] = useState(false);
   const [aiReport, setAiReport] = useState("");
   const [isEditingHistorical, setIsEditingHistorical] = useState(false);
-  const [cepData, setCepData] = useState(null); // {base64, type, name} del CEP adjunto al mes actual
+  const [pendingMetadata, setPendingMetadata] = useState(() => { const d = readLocal(); return d.pendingMetadata || null; });
+  const [cepData, setCepData] = useState(() => {
+    const d = readLocal();
+    return (d.pendingMetadata && d.pendingMetadata.cepData) ? { base64: d.pendingMetadata.cepData, name: d.pendingMetadata.cepName } : null;
+  });
   const [editingId, setEditingId] = useState(null);
   const [toasts, setToasts] = useState([]);
   const [libsReady, setLibsReady] = useState(false);
-  const [pendingMetadata, setPendingMetadata] = useState(null);
   const [tempTotalManual, setTempTotalManual] = useState("");
 
   const galleryInputRef = useRef();
@@ -192,9 +195,25 @@ const App = () => {
       const { data: cloudExp, error: eErr } = await supabase.from('expenses').select('*');
       if (eErr) throw eErr;
 
+      // Handle active unarchived metadata from the cloud
+      let merged = [...(cloudHist || [])];
+
+      const draftMetaRow = merged.find(h => h.id === 'draft-meta');
+      if (draftMetaRow && draftMetaRow.expenses) {
+        try {
+          const parsedMeta = JSON.parse(draftMetaRow.expenses)[0];
+          if (parsedMeta && (!local.pendingMetadata || (draftMetaRow.timestamp || 0) > (local.pendingMetadata.timestamp || 0))) {
+            setPendingMetadata(parsedMeta);
+            local.pendingMetadata = parsedMeta;
+            if (parsedMeta.cepData) setCepData({ base64: parsedMeta.cepData, name: parsedMeta.cepName });
+          }
+        } catch (e) { }
+      }
+
+      merged = merged.filter(h => h.id !== 'draft-meta');
+
       // Merge: preferir el que tenga timestamp más reciente
-      const merged = [...(cloudHist || [])];
-      (local.history || []).forEach(localItem => {
+      (local.history || []).filter(h => h.id !== 'draft-meta').forEach(localItem => {
         const idx = merged.findIndex(c => c.id === localItem.id);
         if (idx === -1) merged.push(localItem);
         else if ((localItem.timestamp || 0) > (merged[idx].timestamp || 0)) merged[idx] = localItem;
@@ -203,7 +222,7 @@ const App = () => {
       if (merged.length > 0) {
         merged.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
         setHistory(merged);
-        localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...local, history: merged, expenses: cloudExp || local.expenses }));
+        localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...local, history: merged, expenses: cloudExp || local.expenses, pendingMetadata: local.pendingMetadata }));
       }
       if (cloudExp && cloudExp.length > 0) setExpenses(cloudExp);
 
@@ -282,11 +301,21 @@ const App = () => {
     if (!isInitialized.current) return;
 
     try {
-      localStorage.setItem(STORAGE.DATA, JSON.stringify({ expenses, history, manualBase }));
+      localStorage.setItem(STORAGE.DATA, JSON.stringify({ expenses, history, manualBase, pendingMetadata }));
     } catch (e) {
       if (e.name === 'QuotaExceededError') notify("Cache lleno. Limpia el historial.", "error");
     }
-  }, [expenses, history, manualBase, notify]);
+  }, [expenses, history, manualBase, pendingMetadata, notify]);
+
+  useEffect(() => {
+    if (!isInitialized.current) return;
+    if (pendingMetadata) {
+      const metaRow = { id: 'draft-meta', month: new Date().getMonth(), year: new Date().getFullYear(), amount: 0, expenses: JSON.stringify([{ ...pendingMetadata, timestamp: Date.now() }]), timestamp: Date.now() };
+      supabase.from('history').upsert(metaRow).catch(() => { });
+    } else {
+      supabase.from('history').delete().eq('id', 'draft-meta').catch(() => { });
+    }
+  }, [pendingMetadata]);
 
   // --- LÓGICA DE CÁLCULOS ---
   const viewingHistorical = useMemo(() => {
@@ -1002,11 +1031,15 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
                   <button onClick={async () => {
                     if (anualHist.length === 0) return notify("No hay historial en " + year, "error");
                     notify("Generando reporte anual extensivo...");
-                    const promptText = `Eres un auditor financiero experto. Redacta un INFORME ANUAL EXTENSIVO formal de la pensión alimenticia de Kenney, año ${year}. 
-Historial por mes (Total depositado sumó ${fmt(sumaTotal)}):
-${JSON.stringify(anualHist.map(h => ({ mes: meses[h.month], monto: h.amount, reporteCorto: h.aiReport })))}
+                    const promptText = `Eres un auditor financiero experto. Redacta un INFORME ANUAL CONSOLIDADO formal de la pensión alimenticia de Kenney, revisando en retrospectiva todo el año ${year}. 
 
-Escribe un análisis completo sobre los gastos del año y el balance general. Genera el reporte final listo para presentarse formalmente, asegurándote de desglosar y explicar conclusiones generales.`;
+HISTORIAL MES A MES (Total de todo el año: ${fmt(sumaTotal)}):
+${JSON.stringify(anualHist.map(h => ({ mes: meses[h.month], depositado_total_mes: h.amount, reporte_original_texto: h.aiReport })))}
+
+INSTRUCCIONES CLAVE:
+1. Analiza el historial provisto y elabora un "resumen de los resúmenes mes a mes" indicando qué meses destacaron, picos, o eventos importantes de manera fluida y ejecutiva.
+2. Crea un texto continuo, coherente y muy bien formateado listo para presentarse formalmente. No repitas la información punto por punto como máquina, explícala como informe de cierre de año.
+3. Termina de manera formal el documento en tercera persona, mencionando que se emite a solicitud de Haidar Sabag, indicando el Balance Total de ${fmt(sumaTotal)} aportado durante ${year}.`;
 
                     try {
                       const { text, model } = await callAiFailover({ prompt: promptText });
