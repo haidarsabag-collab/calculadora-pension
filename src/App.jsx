@@ -219,6 +219,8 @@ const App = () => {
         metaObj.ticketsData.push({ name: file.name, data: b64, type: file.type });
       } else if (type === 'pdf') {
         metaObj.pdfData = b64;
+        // SMART PDF IMPORT: If it's a PDF, also trigger the AI analysis to extract expenses
+        await analyzePdfForHistory({ target: { files: [file] } });
       } else if (type === 'cep') {
         metaObj.cepData = b64;
         setCepAttached(b64);
@@ -406,27 +408,6 @@ const App = () => {
     reader.readAsDataURL(file);
   };
 
-  const generateSmartNarrative = async () => {
-    if (!keys.gemini && !keys.groq && !keys.openrouter) {
-      notify("Configura al menos una llave de IA para redacción mágica", "error");
-      setShowConfig(true);
-      return;
-    }
-    setIsScanning(true);
-    const dataContext = `Base: ${fmt(currentBase)}. Mes: ${meses[month]}. Total a pagar: ${fmt(totalFinal)}. Gastos: ${JSON.stringify(activeAjustes)}.`;
-    const prompt = `Actúa como un asistente financiero experto. Redacta un mensaje de WhatsApp/Reporte para la madre sobre la pensión. Sé cordial, transparente y muy detallado en el desglose basándote en: ${dataContext}. Responde SOLO en JSON plano: {"report": "texto del reporte..."}`;
-
-    try {
-      const { text, model } = await callAiFailover({ prompt });
-      const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
-      setAiReport(parsed.report);
-      notify(`Reporte redactado por ${model}`);
-    } catch (e) {
-      notify("Error en redacción automática", "error");
-    } finally {
-      setIsScanning(false);
-    }
-  };
 
   // --- ANALIZADOR DE PDF HISTÓRICO CON IA (V4 - SERVER FIRST) ---
   const analyzePdfForHistory = async (e) => {
@@ -1009,16 +990,16 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
           </div>
         )}
 
-        {/* NARRATIVA RESUMEN */}
         <div className="bg-white border border-[#DADCE0] rounded-[32px] p-6 mb-8 shadow-sm">
           <div className="flex items-center justify-between mb-3 text-blue-600">
             <div className="flex items-center gap-2">
               <Type className="w-4 h-4" />
-              <h4 className="text-[10px] font-black uppercase tracking-widest">Resumen Desglosado</h4>
+              <h4 className="text-[10px] font-black uppercase tracking-widest">Resumen Desglosado </h4>
             </div>
-            <button onClick={generateSmartNarrative} className="p-2 bg-blue-50 text-blue-600 rounded-xl hover:bg-blue-600 hover:text-white transition-all flex items-center gap-2 text-[9px] font-black uppercase">
-              <BrainCircuit className="w-3 h-3" /> Redactar con IA
-            </button>
+            <div className="flex items-center gap-2 bg-blue-50 px-3 py-1.5 rounded-full">
+              <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+              <span className="text-[8px] font-black uppercase text-blue-600 tracking-widest">Inteligencia Activa</span>
+            </div>
           </div>
           <textarea ref={textareaRef} value={aiReport} onChange={e => setAiReport(e.target.value)} className="w-full min-h-[200px] p-4 bg-slate-50 rounded-2xl text-xs font-mono text-slate-700 leading-relaxed outline-none resize-none border border-slate-200 shadow-inner" />
         </div>
