@@ -67,6 +67,7 @@ const App = () => {
   const manualTicketsRef = useRef();
   const textareaRef = useRef(null);
   const formRef = useRef(null);
+  const isInitialized = useRef(false); // FLAG: impide borrar localStorage antes de que init() cargue los datos
 
   const [newEx, setNewEx] = useState({
     name: "", amount: "", paidBy: "haidar", responsibility: "shared", installments: 1, date: new Date().toISOString().split('T')[0], imageData: null
@@ -174,21 +175,16 @@ const App = () => {
         }
 
         await loadSupabaseData();
-      } catch (e) { console.error("Error init"); }
+        isInitialized.current = true; // A partir de aquí ya podemos guardar en localStorage sin riesgo
+      } catch (e) { console.error("Error init", e); }
     };
     init();
   }, []);
 
   useEffect(() => {
-    // Inject pdf.js for browser-side PDF parsing
-    if (!window.pdfjsLib) {
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-      script.onload = () => {
-        window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-      };
-      document.head.appendChild(script);
-    }
+    // SOLO guardar en localStorage DESPUÉS de que init() haya cargado los datos.
+    // Esto evita que el estado inicial vacío ([]) sobreescriba los datos guardados.
+    if (!isInitialized.current) return;
 
     try {
       localStorage.setItem(STORAGE.DATA, JSON.stringify({ expenses, history, manualBase }));
