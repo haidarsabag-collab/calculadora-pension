@@ -137,24 +137,40 @@ const App = () => {
         setLibsReady(true);
 
         const savedV25 = localStorage.getItem("pension_hadi_offline_data_v25");
-        const saved = localStorage.getItem(STORAGE.DATA);
+        const savedV31 = localStorage.getItem(STORAGE.DATA);
 
-        if (saved) {
-          try {
-            const data = JSON.parse(saved);
-            if (Array.isArray(data.expenses)) setExpenses(data.expenses);
-            if (Array.isArray(data.history)) setHistory(data.history);
-            if (data.manualBase) setManualBase(data.manualBase);
-          } catch (e) { console.error("Error legacy data", e); }
-        } else if (savedV25) {
+        // MIGRACIÓN AGRESIVA: Si hay datos en v25 y v31 está vacío o incompleto, mezclar.
+        if (savedV25) {
           try {
             const data25 = JSON.parse(savedV25);
-            if (Array.isArray(data25.expenses)) setExpenses(data25.expenses);
-            if (Array.isArray(data25.history)) setHistory(data25.history);
+            let data31 = savedV31 ? JSON.parse(savedV31) : { history: [], expenses: [] };
+
+            // Mezclar historiales si no existen en v31
+            if (Array.isArray(data25.history)) {
+              data25.history.forEach(h => {
+                if (!data31.history.some(h31 => h31.id === h.id)) {
+                  data31.history.push(h);
+                }
+              });
+            }
+            if (Array.isArray(data25.expenses)) {
+              data25.expenses.forEach(e => {
+                if (!data31.expenses.some(e31 => e31.id === e.id)) {
+                  data31.expenses.push(e);
+                }
+              });
+            }
+            localStorage.setItem(STORAGE.DATA, JSON.stringify(data31));
+            setHistory(data31.history);
+            setExpenses(data31.expenses);
             if (data25.manualBase) setManualBase(data25.manualBase);
-            localStorage.setItem(STORAGE.DATA, savedV25);
-            notify("¡Historial anterior recuperado!", "success");
-          } catch (e) { console.error("Error migration", e); }
+            notify("✓ Datos antiguos migrados a v31", "success");
+          } catch (e) { console.error("Migration error", e); }
+        } else if (savedV31) {
+          const d = JSON.parse(savedV31);
+          if (Array.isArray(d.expenses)) setExpenses(d.expenses);
+          if (Array.isArray(d.history)) setHistory(d.history);
+          if (d.manualBase) setManualBase(d.manualBase);
         }
 
         await loadSupabaseData();
@@ -1202,6 +1218,17 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
           ) : <div />}
           <button onClick={generatePDF} className={`w-full flex items-center justify-center gap-3 py-5 bg-[#1A73E8] text-white rounded-3xl font-black text-xs uppercase shadow-xl hover:bg-blue-700 transition-all ${viewingHistorical && !isEditingHistorical ? 'col-span-1 sm:col-span-2' : ''}`}>
             <Printer className="w-5 h-5" /> {viewingHistorical ? 'REGENERAR REPORTE DEL MES Y DESCARGAR' : 'GENERAR REPORTE Y DESCARGAR'}
+          </button>
+        </div>
+
+        {/* ACCIÓN DE SINCRONIZACIÓN FORZADA */}
+        <div className="px-2 mt-4">
+          <button onClick={async () => {
+            notify("Forzando sincronización completa...");
+            await loadSupabaseData();
+            notify("✓ Datos actualizados desde la nube", "success");
+          }} className="w-full flex items-center justify-center gap-2 py-3 bg-slate-100 text-slate-500 rounded-2xl text-[10px] font-black uppercase hover:bg-slate-200 transition-all border border-slate-200">
+            <RefreshCw className="w-4 h-4" /> Forzar Sincronización con la Nube
           </button>
         </div>
 
