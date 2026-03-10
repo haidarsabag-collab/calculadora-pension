@@ -556,6 +556,7 @@ const App = () => {
       }
     ];
 
+    let lastError = "Falta configuración de llave o los motores no están disponibles.";
     for (const config of configs) {
       if (!config.key) continue;
       for (const model of config.models) {
@@ -565,21 +566,54 @@ const App = () => {
           if (result) return { text: result, model: `${config.provider} (${model})` };
         } catch (e) {
           console.warn(`Falló ${model}:`, e);
+          lastError = e.message;
         }
       }
     }
-    throw new Error("Todos los motores de IA fallaron o falta configuración.");
+    throw new Error(lastError);
   };
 
   const handleImageScan = async (e) => {
     const target = e.target;
     const file = target.files?.[0];
     if (!file) return;
+
+    if (!keys.gemini && !keys.groq && !keys.openrouter) {
+      notify("Configura al menos una llave de IA en ⚙️", "error");
+      setShowConfig(true);
+      target.value = '';
+      return;
+    }
+
     setIsScanning(true);
 
     const reader = new FileReader();
     reader.onload = async () => {
-      const base64Str = reader.result;
+      let base64Str = reader.result;
+
+      // Smart compression para evitar 'Payload Too Large' con fotos del celular
+      if (base64Str.length > 1500000) {
+        try {
+          base64Str = await new Promise((res) => {
+            const img = new Image();
+            img.onload = () => {
+              const maxDim = 1200;
+              let w = img.width, h = img.height;
+              if (w > maxDim || h > maxDim) {
+                if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
+                else { w = Math.round(w * maxDim / h); h = maxDim; }
+              }
+              const canvas = document.createElement('canvas');
+              canvas.width = w; canvas.height = h;
+              const ctx = canvas.getContext('2d');
+              ctx.drawImage(img, 0, 0, w, h);
+              res(canvas.toDataURL(file.type || 'image/jpeg', 0.8));
+            };
+            img.src = reader.result;
+          });
+        } catch (err) { console.warn("Fallback de compresión de imagen ignorado", err); }
+      }
+
       const base64Data = base64Str.split(',')[1];
       const mimeType = file.type || "image/jpeg";
       const prompt = "Analiza este ticket. Responde SOLO JSON plano: {\"name\": \"...\", \"amount\": 00.00}";
@@ -628,7 +662,7 @@ const App = () => {
         notify(`✓ Escaneado con ${model} y adjuntado visualmente`);
       } catch (err) {
         console.error("Scan Error:", err);
-        notify("La IA no pudo leer los datos del ticket. Llénalos manual. (No se adjuntó)", "warning");
+        notify(`Error de Escaneo: ${err.message.substring(0, 45)}. Llénalo a mano (no la adjuntó)`, "warning");
       } finally {
         setIsScanning(false);
         target.value = '';
@@ -999,7 +1033,7 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
   };
 
   return (
-    <div className="min-h-screen bg-[#F8F9FA] text-[#202124] font-sans pb-20 selection:bg-blue-100">
+    <div className="min-h-screen bg-[#F8F9FA] text-[#202124] font-sans pb-20 selection:bg-blue-100" >
 
       {/* MODAL ANUAL */}
       {showAnnualSummary && (
@@ -1554,114 +1588,122 @@ INSTRUCCIONES CLAVE:
 
 
       {/* MODAL HISTORIAL */}
-      {showHistory && (
-        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[2000] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-sm rounded-[44px] shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
-            <div className="p-8 border-b flex justify-between bg-slate-50">
-              <h3 className="font-black text-xs uppercase text-slate-500">Historial de Meses</h3>
-              <button onClick={() => setShowHistory(false)}><X className="w-5 h-5" /></button>
-            </div>
-            <div className="p-6 overflow-y-auto space-y-3 flex-1 custom-scroll">
-              {(history || []).length === 0 ? (
-                <div className="text-center p-8 bg-blue-50/50 rounded-[28px] border border-blue-100/50">
-                  <p className="text-xs font-bold text-blue-800 mb-2">No tienes meses archivados</p>
-                  <p className="text-[10px] text-blue-600/80 leading-relaxed font-medium">Para crear un archivo histórico, usa las flechas (+ / -) para ir a un mes pasado, agrega movimientos y presiona <b>"FINALIZAR PERIODO"</b>.</p>
-                </div>
-              ) : (
-                (history || []).map(h => h && (
-                  <HistoryItem key={h.id} h={h} meses={meses} fmt={fmt}
-                    onEdit={() => { setMonth(h.month); setYear(h.year); setIsEditingHistorical(true); setShowHistory(false); }}
-                    onSaveAmount={async (newAmount) => {
-                      const updated = { ...h, amount: parseFloat(newAmount), timestamp: Date.now() };
-                      setHistory(prev => prev.map(x => x.id === h.id ? updated : x));
-                      const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
-                      localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(x => x.id === h.id ? updated : x) }));
-                      const cleanUpdated = { ...updated }; delete cleanUpdated.cepData; delete cleanUpdated.cepName;
-                      const { error } = await supabase.from('history').upsert(cleanUpdated);
-                      notify(error ? 'Error al guardar en nube' : `✓ ${meses[h.month]} actualizado a ${fmt(parseFloat(newAmount))}`);
-                    }}
-                  />
-                ))
-              )}
-            </div>
-            <div className="p-4 bg-slate-50 border-t flex justify-center">
-              <button onClick={async () => {
-                if (window.confirm("¿BORRAR TODO EL HISTORIAL Y DATOS EN LA NUBE? ¡ESTO ES IRREVERSIBLE!")) {
-                  await supabase.from('history').delete().neq('id', '0');
-                  await supabase.from('expenses').delete().neq('id', '0');
-                  window.location.reload();
-                }
-              }} className="text-[9px] font-black text-red-400 uppercase tracking-widest">Borrar Historial en Nube</button>
+      {
+        showHistory && (
+          <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[2000] flex items-center justify-center p-4">
+            <div className="bg-white w-full max-w-sm rounded-[44px] shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+              <div className="p-8 border-b flex justify-between bg-slate-50">
+                <h3 className="font-black text-xs uppercase text-slate-500">Historial de Meses</h3>
+                <button onClick={() => setShowHistory(false)}><X className="w-5 h-5" /></button>
+              </div>
+              <div className="p-6 overflow-y-auto space-y-3 flex-1 custom-scroll">
+                {(history || []).length === 0 ? (
+                  <div className="text-center p-8 bg-blue-50/50 rounded-[28px] border border-blue-100/50">
+                    <p className="text-xs font-bold text-blue-800 mb-2">No tienes meses archivados</p>
+                    <p className="text-[10px] text-blue-600/80 leading-relaxed font-medium">Para crear un archivo histórico, usa las flechas (+ / -) para ir a un mes pasado, agrega movimientos y presiona <b>"FINALIZAR PERIODO"</b>.</p>
+                  </div>
+                ) : (
+                  (history || []).map(h => h && (
+                    <HistoryItem key={h.id} h={h} meses={meses} fmt={fmt}
+                      onEdit={() => { setMonth(h.month); setYear(h.year); setIsEditingHistorical(true); setShowHistory(false); }}
+                      onSaveAmount={async (newAmount) => {
+                        const updated = { ...h, amount: parseFloat(newAmount), timestamp: Date.now() };
+                        setHistory(prev => prev.map(x => x.id === h.id ? updated : x));
+                        const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+                        localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(x => x.id === h.id ? updated : x) }));
+                        const cleanUpdated = { ...updated }; delete cleanUpdated.cepData; delete cleanUpdated.cepName;
+                        const { error } = await supabase.from('history').upsert(cleanUpdated);
+                        notify(error ? 'Error al guardar en nube' : `✓ ${meses[h.month]} actualizado a ${fmt(parseFloat(newAmount))}`);
+                      }}
+                    />
+                  ))
+                )}
+              </div>
+              <div className="p-4 bg-slate-50 border-t flex justify-center">
+                <button onClick={async () => {
+                  if (window.confirm("¿BORRAR TODO EL HISTORIAL Y DATOS EN LA NUBE? ¡ESTO ES IRREVERSIBLE!")) {
+                    await supabase.from('history').delete().neq('id', '0');
+                    await supabase.from('expenses').delete().neq('id', '0');
+                    window.location.reload();
+                  }
+                }} className="text-[9px] font-black text-red-400 uppercase tracking-widest">Borrar Historial en Nube</button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
       {/* INPUTS OCULTOS */}
       <input type="file" ref={galleryInputRef} accept="image/*" capture="environment" className="hidden" onChange={handleImageScan} />
       <input type="file" ref={ticketsInputRef} accept="image/*" multiple className="hidden" onChange={(e) => handleAttachment(e, 'tickets')} />
       <input type="file" ref={cepInputRef} accept="image/*" className="hidden" onChange={(e) => handleAttachment(e, 'cep')} />
       {/* MODAL CONFIGURACIÓN API KEY */}
-      {showConfig && (
-        <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[2000] flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-sm rounded-[44px] shadow-2xl overflow-hidden flex flex-col">
-            <div className="p-8 border-b flex justify-between bg-slate-50">
-              <h3 className="font-black text-xs uppercase text-slate-500 flex items-center gap-2"><Lock className="w-4 h-4" /> Configuración Gemini</h3>
-              <button onClick={() => setShowConfig(false)}><X className="w-5 h-5" /></button>
-            </div>
-            <div className="p-6 space-y-4">
-              <p className="text-[10px] text-slate-500 font-medium leading-relaxed uppercase tracking-tighter">
-                Motores de Inteligencia Híbrida (Failover Activo)
-              </p>
-
-              <div>
-                <span className="text-[9px] font-black uppercase text-slate-400 ml-2">Google Gemini:</span>
-                <input type="password" value={keys.gemini} onChange={e => setKeys(p => ({ ...p, gemini: e.target.value }))} placeholder="AIzaSy..." className="w-full mt-1 bg-slate-50 p-3 rounded-xl outline-none text-xs font-mono border border-slate-200 focus:border-blue-400 transition-all" />
+      {
+        showConfig && (
+          <div className="fixed inset-0 bg-slate-900/95 backdrop-blur-md z-[2000] flex items-center justify-center p-4">
+            <div className="bg-white w-full max-w-sm rounded-[44px] shadow-2xl overflow-hidden flex flex-col">
+              <div className="p-8 border-b flex justify-between bg-slate-50">
+                <h3 className="font-black text-xs uppercase text-slate-500 flex items-center gap-2"><Lock className="w-4 h-4" /> Configuración Gemini</h3>
+                <button onClick={() => setShowConfig(false)}><X className="w-5 h-5" /></button>
               </div>
+              <div className="p-6 space-y-4">
+                <p className="text-[10px] text-slate-500 font-medium leading-relaxed uppercase tracking-tighter">
+                  Motores de Inteligencia Híbrida (Failover Activo)
+                </p>
 
-              <div>
-                <span className="text-[9px] font-black uppercase text-slate-400 ml-2">Groq Vision:</span>
-                <input type="password" value={keys.groq} onChange={e => setKeys(p => ({ ...p, groq: e.target.value }))} placeholder="gsk_..." className="w-full mt-1 bg-slate-50 p-3 rounded-xl outline-none text-xs font-mono border border-slate-200 focus:border-orange-400 transition-all" />
+                <div>
+                  <span className="text-[9px] font-black uppercase text-slate-400 ml-2">Google Gemini:</span>
+                  <input type="password" value={keys.gemini} onChange={e => setKeys(p => ({ ...p, gemini: e.target.value }))} placeholder="AIzaSy..." className="w-full mt-1 bg-slate-50 p-3 rounded-xl outline-none text-xs font-mono border border-slate-200 focus:border-blue-400 transition-all" />
+                </div>
+
+                <div>
+                  <span className="text-[9px] font-black uppercase text-slate-400 ml-2">Groq Vision:</span>
+                  <input type="password" value={keys.groq} onChange={e => setKeys(p => ({ ...p, groq: e.target.value }))} placeholder="gsk_..." className="w-full mt-1 bg-slate-50 p-3 rounded-xl outline-none text-xs font-mono border border-slate-200 focus:border-orange-400 transition-all" />
+                </div>
+
+                <div>
+                  <span className="text-[9px] font-black uppercase text-slate-400 ml-2">OpenRouter (Pro):</span>
+                  <input type="password" value={keys.openrouter} onChange={e => setKeys(p => ({ ...p, openrouter: e.target.value }))} placeholder="sk-or-v1-..." className="w-full mt-1 bg-slate-50 p-3 rounded-xl outline-none text-xs font-mono border border-slate-200 focus:border-purple-400 transition-all" />
+                </div>
+
+                <button onClick={() => {
+                  localStorage.setItem(STORAGE.GEMINI, keys.gemini);
+                  localStorage.setItem(STORAGE.GROQ, keys.groq);
+                  localStorage.setItem(STORAGE.OPENROUTER, keys.openrouter);
+                  notify("Llaves de IA sincronizadas ✓");
+                  setShowConfig(false);
+                }} className="w-full py-4 mt-2 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase shadow-lg hover:bg-black transition-all">
+                  Guardar Configuración
+                </button>
               </div>
-
-              <div>
-                <span className="text-[9px] font-black uppercase text-slate-400 ml-2">OpenRouter (Pro):</span>
-                <input type="password" value={keys.openrouter} onChange={e => setKeys(p => ({ ...p, openrouter: e.target.value }))} placeholder="sk-or-v1-..." className="w-full mt-1 bg-slate-50 p-3 rounded-xl outline-none text-xs font-mono border border-slate-200 focus:border-purple-400 transition-all" />
-              </div>
-
-              <button onClick={() => {
-                localStorage.setItem(STORAGE.GEMINI, keys.gemini);
-                localStorage.setItem(STORAGE.GROQ, keys.groq);
-                localStorage.setItem(STORAGE.OPENROUTER, keys.openrouter);
-                notify("Llaves de IA sincronizadas ✓");
-                setShowConfig(false);
-              }} className="w-full py-4 mt-2 bg-slate-900 text-white rounded-2xl font-black text-xs uppercase shadow-lg hover:bg-black transition-all">
-                Guardar Configuración
-              </button>
             </div>
           </div>
-        </div>
-      )}
+        )
+      }
 
-      {isScanning && (
-        <div className="fixed inset-0 bg-white/95 z-[6000] flex flex-col items-center justify-center animate-in fade-in">
-          <div className="relative">
-            <div className="w-24 h-24 border-4 border-slate-100 border-t-blue-600 rounded-full animate-spin"></div>
-            <BrainCircuit className="w-12 h-12 text-blue-600 absolute inset-0 m-auto animate-pulse" />
+      {
+        isScanning && (
+          <div className="fixed inset-0 bg-white/95 z-[6000] flex flex-col items-center justify-center animate-in fade-in">
+            <div className="relative">
+              <div className="w-24 h-24 border-4 border-slate-100 border-t-blue-600 rounded-full animate-spin"></div>
+              <BrainCircuit className="w-12 h-12 text-blue-600 absolute inset-0 m-auto animate-pulse" />
+            </div>
+            <p className="text-[10px] font-black mt-8 uppercase tracking-[0.6em] text-blue-600 animate-pulse text-center">Analizando nota y<br />capturando evidencia...</p>
           </div>
-          <p className="text-[10px] font-black mt-8 uppercase tracking-[0.6em] text-blue-600 animate-pulse text-center">Analizando nota y<br />capturando evidencia...</p>
-        </div>
-      )}
+        )
+      }
 
-      {toasts.map(t => (
-        <div key={t.id} className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-6 py-3 rounded-full text-xs font-black shadow-2xl z-[9000] flex items-center gap-2 animate-in slide-in-from-bottom-2">
-          {t.type === 'error' ? <AlertCircle className="w-4 h-4 text-red-400" /> : <CheckCircle2 className="w-4 h-4 text-green-400" />}
-          {t.msg}
-        </div>
-      ))}
+      {
+        toasts.map(t => (
+          <div key={t.id} className="fixed bottom-4 left-1/2 -translate-x-1/2 bg-slate-800 text-white px-6 py-3 rounded-full text-xs font-black shadow-2xl z-[9000] flex items-center gap-2 animate-in slide-in-from-bottom-2">
+            {t.type === 'error' ? <AlertCircle className="w-4 h-4 text-red-400" /> : <CheckCircle2 className="w-4 h-4 text-green-400" />}
+            {t.msg}
+          </div>
+        ))
+      }
 
       <style dangerouslySetInnerHTML={{ __html: `::-webkit-scrollbar { display: none; } .custom-scroll { scrollbar-width: none; }` }} />
-    </div>
+    </div >
   );
 };
 
