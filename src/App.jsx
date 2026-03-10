@@ -78,6 +78,45 @@ const HistoryItem = ({ h, meses, fmt, onEdit, onSaveAmount }) => {
   );
 };
 
+// Fila editable del resumen anual
+const AnnualHistoryRow = ({ h, meses, fmt, STORAGE, supabase, setHistory, notify }) => {
+  const [editingAmt, setEditingAmt] = React.useState(false);
+  const [newAmt, setNewAmt] = React.useState(String(h.amount));
+  return (
+    <div className="bg-slate-50 border border-slate-100 rounded-xl overflow-hidden">
+      <div className="flex justify-between items-center p-4">
+        <span className="text-xs font-black uppercase text-slate-600">{meses[h.month]}</span>
+        <div className="flex items-center gap-2">
+          <span className="font-black text-slate-800">{fmt(h.amount)}</span>
+          <button onClick={() => { setEditingAmt(!editingAmt); setNewAmt(String(h.amount)); }}
+            className="px-2 py-1 bg-amber-100 text-amber-700 rounded-lg text-[9px] font-black uppercase hover:bg-amber-200 transition-all">
+            {editingAmt ? 'Cancelar' : '✏️ Editar'}
+          </button>
+        </div>
+      </div>
+      {editingAmt && (
+        <div className="px-4 pb-4 flex items-center gap-2">
+          <span className="text-slate-400 font-black">$</span>
+          <input type="number" value={newAmt} onChange={e => setNewAmt(e.target.value)}
+            className="flex-1 border border-blue-300 rounded-xl px-3 py-2 text-sm font-bold text-blue-700 outline-none focus:border-blue-500"
+            placeholder="Nuevo monto..." autoFocus />
+          <button onClick={async () => {
+            const updated = { ...h, amount: parseFloat(newAmt), timestamp: Date.now() };
+            setHistory(prev => prev.map(x => x.id === h.id ? updated : x));
+            const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+            localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(x => x.id === h.id ? updated : x) }));
+            const { error } = await supabase.from('history').upsert(updated);
+            notify(error ? `Error: ${error.message}` : `✓ ${meses[h.month]} → ${fmt(parseFloat(newAmt))}`);
+            setEditingAmt(false);
+          }} className="px-3 py-2 bg-green-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-green-700 transition-all">
+            Guardar
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const App = () => {
   // --- HELPER: leer localStorage una sola vez de forma síncrona ---
   const readLocal = () => {
@@ -222,7 +261,27 @@ const App = () => {
         }
 
         await loadSupabaseData();
-        isInitialized.current = true; // A partir de aquí ya podemos guardar en localStorage sin riesgo
+        isInitialized.current = true;
+
+        // Auto-navegar al mes siguiente al último finalizado
+        const localData = readLocal();
+        if (Array.isArray(localData.history) && localData.history.length > 0) {
+          const currentYear = new Date().getFullYear();
+          const currentMonth = new Date().getMonth();
+          // Ordenar por año y mes descendente para encontrar el último
+          const sorted = [...localData.history].sort((a, b) =>
+            b.year !== a.year ? b.year - a.year : b.month - a.month
+          );
+          const last = sorted[0];
+          let nextMonth = last.month + 1;
+          let nextYear = last.year;
+          if (nextMonth > 11) { nextMonth = 0; nextYear++; }
+          // Solo navegar si no estamos ya en el mes actual o futuro
+          if (nextYear < currentYear || (nextYear === currentYear && nextMonth <= currentMonth)) {
+            setMonth(nextMonth);
+            setYear(nextYear);
+          }
+        }
       } catch (e) { console.error("Error init", e); }
     };
     init();
@@ -927,10 +986,9 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
 
                   <div className="space-y-2 mb-6">
                     {anualHist.sort((a, b) => a.month - b.month).map(h => (
-                      <div key={h.id} className="flex justify-between items-center bg-slate-50 p-4 rounded-xl border border-slate-100">
-                        <span className="text-xs font-black uppercase text-slate-600">{meses[h.month]}</span>
-                        <span className="font-black text-slate-800">{fmt(h.amount)}</span>
-                      </div>
+                      <AnnualHistoryRow key={h.id} h={h} meses={meses} fmt={fmt}
+                        STORAGE={STORAGE} supabase={supabase}
+                        setHistory={setHistory} notify={notify} />
                     ))}
                     {anualHist.length === 0 && <p className="text-center text-slate-400 text-sm font-bold p-4">No hay datos archivados en {year}</p>}
                   </div>
