@@ -857,15 +857,27 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
           const now = new Date();
           const isPastMonth = year < now.getFullYear() || (year === now.getFullYear() && month < now.getMonth());
           return (
-            <div className="bg-white border-b-4 border-[#1A73E8] rounded-[40px] p-8 text-center shadow-md mb-8 relative overflow-hidden group">
+            <div className={`bg-white border-b-8 rounded-[40px] p-8 text-center shadow-2xl mb-8 relative overflow-hidden group transition-all ${viewingHistorical ? 'border-amber-400' : 'border-[#1A73E8]'}`}>
+              {/* STATUS BADGE */}
+              <div className="absolute top-4 right-8 flex gap-2">
+                <div className={`px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest ${viewingHistorical ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700'}`}>
+                  • {viewingHistorical ? 'Periodo Archivado' : isPastMonth ? 'Atrasado' : 'Mes Activo'}
+                </div>
+                {tempTotalManual !== "" && !viewingHistorical && (
+                  <div className="bg-purple-100 text-purple-700 px-3 py-1 rounded-full text-[8px] font-black uppercase tracking-widest animate-pulse">
+                    Monto Manual
+                  </div>
+                )}
+              </div>
+
               <p className="text-[11px] font-black text-slate-400 uppercase tracking-[0.3em] mb-4 italic">
-                {viewingHistorical ? 'Editando Archivo Histórico' : isPastMonth ? 'Mes Pasado (Edición Manual)' : 'Monto Final del Depósito'}
+                {viewingHistorical ? 'Reporte Final Consolidado' : isPastMonth ? 'Monto Manual (Sin Cierre)' : 'Monto Final del Depósito'}
               </p>
 
               {isPastMonth || viewingHistorical ? (
                 <div className="flex flex-col items-center justify-center gap-4">
-                  <div className="flex items-center gap-2">
-                    <span className="text-4xl text-slate-400 font-black">$</span>
+                  <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-3xl pr-6 border border-slate-100 shadow-inner group/input">
+                    <span className="text-4xl text-slate-300 font-black ml-4">$</span>
                     <input
                       type="number"
                       value={(viewingHistorical ? viewingHistorical.amount : tempTotalManual) || ""}
@@ -878,13 +890,38 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
                         }
                       }}
                       placeholder={fmt(viewingHistorical ? viewingHistorical.amount : (tempTotalManual || totalFinal)).replace('$', '').replace(/,/g, '')}
-                      className="text-6xl font-black bg-slate-50 border-b-4 border-blue-200 text-center text-blue-600 outline-none w-64 rounded-2xl py-2 focus:border-blue-600 transition-all font-mono"
+                      className="text-6xl font-extrabold bg-transparent text-center text-blue-600 outline-none w-64 transition-all font-mono placeholder:text-blue-200"
                     />
+                    {(viewingHistorical || tempTotalManual !== "") && (
+                      <button
+                        onClick={() => {
+                          if (viewingHistorical) {
+                            // Restore from calculated if in history
+                            const ajustesTotal = activeAjustes.reduce((acc, curr) => acc + (curr.monthlyImpact || 0), 0);
+                            const restored = Math.ceil((viewingHistorical.baseUsed + ajustesTotal) * 100) / 100;
+                            setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? { ...h, amount: restored } : h));
+                            notify("Monto restaurado al calculado");
+                          } else {
+                            setTempTotalManual("");
+                            notify("Regresando a cálculo automático");
+                          }
+                        }}
+                        title="Restaurar monto calculado automáticamente"
+                        className="p-3 bg-white text-slate-400 rounded-2xl shadow-sm hover:text-red-500 hover:shadow-md transition-all active:scale-95 border border-slate-100"
+                      >
+                        <RefreshCw className="w-5 h-5" />
+                      </button>
+                    )}
                   </div>
-                  <p className="text-xs text-slate-400 font-bold">Edita el total depositado manualmente</p>
+                  <p className="text-[10px] text-slate-400 font-black uppercase tracking-widest animate-pulse">Editando Monto Directamente</p>
                 </div>
               ) : (
-                <h2 className="text-7xl font-black tracking-tighter text-slate-900">{fmt(totalFinal)}</h2>
+                <div className="relative inline-block cursor-pointer group" onClick={() => setTempTotalManual(totalFinal)}>
+                  <h2 className="text-7xl font-black tracking-tighter text-slate-900 group-hover:text-blue-600 transition-colors">{fmt(totalFinal)}</h2>
+                  <div className="absolute -right-8 top-0 opacity-0 group-hover:opacity-100 transition-all">
+                    <Pencil className="w-6 h-6 text-blue-400" />
+                  </div>
+                </div>
               )}
 
               {(isPastMonth || viewingHistorical) && (
@@ -1065,7 +1102,7 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
             </button>
           ) : <div />}
           <button onClick={generatePDF} className={`w-full flex items-center justify-center gap-3 py-5 bg-[#1A73E8] text-white rounded-3xl font-black text-xs uppercase shadow-xl hover:bg-blue-700 transition-all ${viewingHistorical && !isEditingHistorical ? 'col-span-1 sm:col-span-2' : ''}`}>
-            <Printer className="w-5 h-5" /> REGENERAR REPORTE DEL MES Y DESCARGAR
+            <Printer className="w-5 h-5" /> {viewingHistorical ? 'REGENERAR REPORTE DEL MES Y DESCARGAR' : 'GENERAR REPORTE Y DESCARGAR'}
           </button>
         </div>
 
