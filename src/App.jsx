@@ -322,9 +322,9 @@ const App = () => {
     if (!isInitialized.current) return;
     if (pendingMetadata) {
       const metaRow = { id: 'draft-meta', month: new Date().getMonth(), year: new Date().getFullYear(), amount: 0, expenses: JSON.stringify([{ ...pendingMetadata, timestamp: Date.now() }]), timestamp: Date.now() };
-      supabase.from('history').upsert(metaRow).catch(() => { });
+      supabase.from('history').upsert(metaRow).then(() => { }).catch(() => { });
     } else {
-      supabase.from('history').delete().eq('id', 'draft-meta').catch(() => { });
+      supabase.from('history').delete().eq('id', 'draft-meta').then(() => { }).catch(() => { });
     }
   }, [pendingMetadata]);
 
@@ -494,7 +494,7 @@ const App = () => {
       {
         provider: 'GEMINI',
         key: keys.gemini,
-        models: ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+        models: ['gemini-2.0-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-pro-latest'],
         call: async (key, model) => {
           // Gemini 2.0+ usa v1beta, 1.5 también funciona en v1beta
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
@@ -518,8 +518,7 @@ const App = () => {
       {
         provider: 'GROQ',
         key: keys.groq,
-        // llama-3.3-70b-versatile: texto; llava-v1.5-7b-4096-preview: vision
-        models: imageBase64 ? ['meta-llama/llama-4-scout-17b-16e-instruct'] : ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
+        models: imageBase64 ? ['llama-3.2-11b-vision-preview', 'llama-3.2-90b-vision-preview'] : ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
         call: async (key, model) => {
           const body = {
             model,
@@ -545,7 +544,7 @@ const App = () => {
       {
         provider: 'OPENROUTER',
         key: keys.openrouter,
-        models: ['google/gemini-2.0-flash-001', 'google/gemini-flash-1.5', 'meta-llama/llama-3.2-11b-vision-instruct:free'],
+        models: ['google/gemini-2.0-flash-001', 'google/gemini-1.5-flash', 'meta-llama/llama-3.2-11b-vision-instruct:free'],
         call: async (key, model) => {
           const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
@@ -661,7 +660,7 @@ const App = () => {
           localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
 
           const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
-          supabase.from('history').upsert(cleanHist).catch(console.error);
+          supabase.from('history').upsert(cleanHist).then(() => { }).catch(console.error);
         } else {
           setPendingMetadata(m => {
             const mObj = m || { isMetadata: true };
