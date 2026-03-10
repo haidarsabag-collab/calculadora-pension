@@ -1022,19 +1022,7 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
                 </div>
               )}
 
-              {(isPastMonth || viewingHistorical) && (
-                <div className="mt-8 flex flex-wrap justify-center gap-3">
-                  <button onClick={() => manualTicketsRef.current.click()} className="px-5 py-3 rounded-full text-[10px] font-black uppercase transition-all shadow-sm bg-green-50 text-green-700 border border-green-200 hover:bg-green-600 hover:text-white flex items-center gap-2">
-                    <Images className="w-4 h-4" /> 1. Adjuntar Tickets
-                  </button>
-                  <button onClick={() => manualPdfRef.current.click()} className="px-5 py-3 rounded-full text-[10px] font-black uppercase transition-all shadow-sm bg-red-50 text-red-700 border border-red-200 hover:bg-red-600 hover:text-white flex items-center gap-2">
-                    <FileText className="w-4 h-4" /> 2. Adjuntar PDF Reporte
-                  </button>
-                  <button onClick={() => cepInputRef.current.click()} className="px-5 py-3 rounded-full text-[10px] font-black uppercase transition-all shadow-sm bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-600 hover:text-white flex items-center gap-2">
-                    <Paperclip className="w-4 h-4" /> 3. Adjuntar CEP
-                  </button>
-                </div>
-              )}
+
             </div>
           );
         })()}
