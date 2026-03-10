@@ -105,7 +105,8 @@ const AnnualHistoryRow = ({ h, meses, fmt, STORAGE, supabase, setHistory, notify
             setHistory(prev => prev.map(x => x.id === h.id ? updated : x));
             const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
             localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(x => x.id === h.id ? updated : x) }));
-            const { error } = await supabase.from('history').upsert(updated);
+            const cleanUpdated = { ...updated }; delete cleanUpdated.cepData; delete cleanUpdated.cepName;
+            const { error } = await supabase.from('history').upsert(cleanUpdated);
             notify(error ? `Error: ${error.message}` : `✓ ${meses[h.month]} → ${fmt(parseFloat(newAmt))}`);
             setEditingAmt(false);
           }} className="px-3 py-2 bg-green-600 text-white rounded-xl text-[10px] font-black uppercase hover:bg-green-700 transition-all">
@@ -651,7 +652,9 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
               const histRow = { id: histId, month, year, timestamp: ts, amount: parsed.totalFinal || currentBase, aiReport: parsed.aiReport || `Pensión ${meses[month]} ${year}`, expenses: JSON.stringify(finalList), baseUsed: parsed.base || currentBase };
               setHistory(prev => { const ex = prev.some(h => h.id === histId); return ex ? prev.map(h => h.id === histId ? histRow : h) : [histRow, ...prev]; });
               setAiReport(histRow.aiReport);
-              supabase.from('history').upsert(histRow).then(({ error }) => { if (!error) notify(`✓ Reporte procesado vía ${model}`); });
+
+              const cleanHist = { ...histRow }; delete cleanHist.cepData; delete cleanHist.cepName;
+              supabase.from('history').upsert(cleanHist).then(({ error }) => { if (!error) notify(`✓ Reporte procesado vía ${model}`); });
               return;
             }
           }
@@ -695,7 +698,9 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
       const histRow = { id: histId, month, year, timestamp: ts, amount: parsed.totalFinal || currentBase, aiReport: parsed.aiReport || `Pensión ${meses[month]} ${year}`, expenses: JSON.stringify(finalList), baseUsed: parsed.base || currentBase };
       setHistory(prev => { const ex = prev.some(h => h.id === histId); return ex ? prev.map(h => h.id === histId ? histRow : h) : [histRow, ...prev]; });
       setAiReport(histRow.aiReport);
-      supabase.from('history').upsert(histRow).then(({ error }) => { if (!error) notify(`✓ ${newExpenses.length} movimientos registrados vía ${usedModel}`); });
+
+      const cleanHist = { ...histRow }; delete cleanHist.cepData; delete cleanHist.cepName;
+      supabase.from('history').upsert(cleanHist).then(({ error }) => { if (!error) notify(`✓ ${newExpenses.length} movimientos registrados vía ${usedModel}`); });
 
     } catch (err) {
       console.error('PDF Analysis Error:', err);
@@ -740,7 +745,10 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
         list.filter(x => !x.isMetadata).reduce((s, x) => s + (x.monthlyImpact || 0), 0);
       const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list), amount: Math.round(newTotal * 100) / 100 };
       setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
-      supabase.from('history').upsert(updatedHist);
+
+      const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
+      supabase.from('history').upsert(cleanHist);
+
       notify(`Guardado \u2022 Nuevo total: ${fmt(newTotal)}`);
       resetForm();
       return;
@@ -812,7 +820,8 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
 
     // 2. Sincronización con Supabase (Background)
     try {
-      const { error: hErr } = await supabase.from('history').upsert(histRow);
+      const cleanHist = { ...histRow }; delete cleanHist.cepData; delete cleanHist.cepName;
+      const { error: hErr } = await supabase.from('history').upsert(cleanHist);
       if (hErr) throw hErr;
 
       // Limpiar gastos actuales y subir los nuevos (ajustados por mensualidad)
@@ -1160,7 +1169,10 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
                   setHistory(prev => prev.map(h => h.id === hist.id ? updatedHist : h));
                   const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
                   localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === hist.id ? updatedHist : h) }));
-                  await supabase.from('history').upsert(updatedHist);
+
+                  const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
+                  await supabase.from('history').upsert(cleanHist);
+
                   notify('✓ Resumen regenerado y guardado');
                 } catch (err) {
                   notify('Error: ' + err.message, 'error');
@@ -1182,7 +1194,10 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
               setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
               const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
               localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
-              const { error } = await supabase.from('history').upsert(updatedHist);
+
+              const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
+              const { error } = await supabase.from('history').upsert(cleanHist);
+
               notify(error ? 'Error: ' + error.message : '✓ Resumen guardado correctamente');
             }} className="mt-3 w-full py-3 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-md">
               <Save className="w-4 h-4" /> Guardar Resumen
@@ -1237,7 +1252,10 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
                             list.filter(x => !x.isMetadata).reduce((s, x) => s + (x.monthlyImpact || 0), 0);
                           const updatedHist = { ...viewingHistorical, expenses: JSON.stringify(list), amount: Math.round(newTotal * 100) / 100 };
                           setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
-                          supabase.from('history').upsert(updatedHist);
+
+                          const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
+                          supabase.from('history').upsert(cleanHist);
+
                           notify(`Eliminado • Nuevo total: ${fmt(newTotal)}`);
                         } else {
                           setExpenses(e => e.filter(x => x.id !== aj.id));
@@ -1331,7 +1349,11 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
                     setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
                     const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
                     localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
-                    await supabase.from('history').upsert(updatedHist);
+
+                    const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
+                    await supabase.from('history').upsert(cleanHist);
+
+                    notify('CEP eliminado');
                   } else { setCepData(null); }
                   notify('CEP eliminado');
                 }} className="px-3 py-1.5 bg-red-100 text-red-600 rounded-xl text-[9px] font-black uppercase hover:bg-red-200 transition-all">
@@ -1366,7 +1388,8 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
                       setHistory(prev => prev.map(x => x.id === h.id ? updated : x));
                       const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
                       localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(x => x.id === h.id ? updated : x) }));
-                      const { error } = await supabase.from('history').upsert(updated);
+                      const cleanUpdated = { ...updated }; delete cleanUpdated.cepData; delete cleanUpdated.cepName;
+                      const { error } = await supabase.from('history').upsert(cleanUpdated);
                       notify(error ? 'Error al guardar en nube' : `✓ ${meses[h.month]} actualizado a ${fmt(parseFloat(newAmount))}`);
                     }}
                   />
@@ -1409,7 +1432,10 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
             setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
             const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
             localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
-            const { error } = await supabase.from('history').upsert(updatedHist);
+
+            const cleanHist = { ...updatedHist }; delete cleanHist.cepData; delete cleanHist.cepName;
+            const { error } = await supabase.from('history').upsert(cleanHist);
+
             notify(error ? 'Error al guardar CEP: ' + error.message : '✓ CEP guardado en ' + (meses[viewingHistorical.month] || 'el mes'));
           } else {
             // Guardar en pendingMetadata para el mes activo
