@@ -127,48 +127,42 @@ const App = () => {
 
   // --- SINCRONIZACIÓN HÍBRIDA (SUPABASE + LOCALSTORAGE) ---
   const loadSupabaseData = async () => {
+    // 1. PRIMERO cargar desde localStorage (fuente de verdad inmediata)
+    const saved = localStorage.getItem(STORAGE.DATA);
+    const local = saved ? JSON.parse(saved) : { history: [], expenses: [], manualBase: 5408 };
+
+    if (Array.isArray(local.history) && local.history.length > 0) {
+      setHistory(local.history.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
+    }
+    if (Array.isArray(local.expenses) && local.expenses.length > 0) {
+      setExpenses(local.expenses);
+    }
+    if (local.manualBase) setManualBase(local.manualBase);
+
+    // 2. Intentar enricher con Supabase (si falla, ya tenemos los datos locales)
     try {
       const { data: cloudHist, error: hErr } = await supabase.from('history').select('*');
       if (hErr) throw hErr;
-
       const { data: cloudExp, error: eErr } = await supabase.from('expenses').select('*');
       if (eErr) throw eErr;
 
-      // 1. Obtener lo que hay en local actualmente
-      const saved = localStorage.getItem(STORAGE.DATA);
-      let local = saved ? JSON.parse(saved) : { history: [], expenses: [] };
+      // Merge: preferir el que tenga timestamp más reciente
+      const merged = [...(cloudHist || [])];
+      (local.history || []).forEach(localItem => {
+        const idx = merged.findIndex(c => c.id === localItem.id);
+        if (idx === -1) merged.push(localItem);
+        else if ((localItem.timestamp || 0) > (merged[idx].timestamp || 0)) merged[idx] = localItem;
+      });
 
-      // 2. MERGE DE HISTORIAL (El que tenga el timestamp más reciente gana por cada ID)
-      const mergedHistory = [...(cloudHist || [])];
-
-      if (local.history) {
-        local.history.forEach(localItem => {
-          const cloudIdx = mergedHistory.findIndex(c => c.id === localItem.id);
-          if (cloudIdx === -1) {
-            mergedHistory.push(localItem);
-          } else {
-            // Si el local es más nuevo que lo que bajó de la nube, mantenemos el local
-            if ((localItem.timestamp || 0) > (mergedHistory[cloudIdx].timestamp || 0)) {
-              mergedHistory[cloudIdx] = localItem;
-            }
-          }
-        });
+      if (merged.length > 0) {
+        merged.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        setHistory(merged);
+        localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...local, history: merged, expenses: cloudExp || local.expenses }));
       }
+      if (cloudExp && cloudExp.length > 0) setExpenses(cloudExp);
 
-      // 3. Sincronizar estados de React
-      setHistory(mergedHistory.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
-      if (cloudExp) setExpenses(cloudExp);
-
-      // 4. Actualizar LocalStorage con la verdad mezclada
-      localStorage.setItem(STORAGE.DATA, JSON.stringify({
-        ...local,
-        history: mergedHistory,
-        expenses: cloudExp || local.expenses
-      }));
-
-    } catch (error) {
-      console.error("Supabase Sync Error:", error);
-      notify("Trabajando en modo local (Error de red)", "error");
+    } catch (err) {
+      console.warn("Supabase no disponible, usando modo local:", err.message);
     }
   };
 
