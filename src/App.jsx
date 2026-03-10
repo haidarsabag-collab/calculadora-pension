@@ -309,7 +309,7 @@ const App = () => {
         key: keys.gemini,
         models: ['gemini-1.5-flash', 'gemini-1.5-pro'],
         call: async (key, model) => {
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+          const url = `https://generativelanguage.googleapis.com/v1/models/${model}:generateContent?key=${key}`;
           const res = await fetch(url, {
             method: 'POST',
             body: JSON.stringify({
@@ -482,7 +482,7 @@ const App = () => {
       const visionPrompt = `Analiza este documento de pensión y extrae todos los movimientos. Devuelve SOLO JSON:\n{"base":5408.00,"totalFinal":5408.00,"aiReport":"Resumen","expenses":[{"name":"CONCEPTO","amount":100.00,"paidBy":"haidar","responsibility":"shared","installments":1}]}`;
       let responseText, usedModel;
       if (mimeType === 'application/pdf' && keys.gemini) {
-        const gemRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${keys.gemini}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: visionPrompt }, { inlineData: { mimeType, data: imageBase64 } }] }], generationConfig: { temperature: 0.1 } }) });
+        const gemRes = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${keys.gemini}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: visionPrompt }, { inlineData: { mimeType, data: imageBase64 } }] }], generationConfig: { temperature: 0.1 } }) });
         const gemJson = await gemRes.json();
         if (gemJson.error) throw new Error(`Gemini: ${gemJson.error.message}`);
         responseText = gemJson.candidates?.[0]?.content?.parts?.[0]?.text;
