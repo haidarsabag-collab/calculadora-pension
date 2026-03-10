@@ -142,7 +142,7 @@ const App = () => {
   const [year, setYear] = useState(new Date().getFullYear());
   const [month, setMonth] = useState(new Date().getMonth());
   const [expenses, setExpenses] = useState(() => { const d = readLocal(); return Array.isArray(d.expenses) ? d.expenses : []; });
-  const [history, setHistory] = useState(() => { const d = readLocal(); return Array.isArray(d.history) ? d.history.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)) : []; });
+  const [history, setHistory] = useState(() => { const d = readLocal(); return Array.isArray(d.history) ? d.history.sort((a, b) => (b.year - a.year) || (b.month - a.month)) : []; });
   const [manualBase, setManualBase] = useState(() => { const d = readLocal(); return d.manualBase || 5408; });
   const [keys, setKeys] = useState({
     gemini: localStorage.getItem(STORAGE.GEMINI) || "",
@@ -192,7 +192,7 @@ const App = () => {
     const local = saved ? JSON.parse(saved) : { history: [], expenses: [], manualBase: 5408 };
 
     if (Array.isArray(local.history) && local.history.length > 0) {
-      setHistory(local.history.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
+      setHistory(local.history.sort((a, b) => (b.year - a.year) || (b.month - a.month)));
     }
     if (Array.isArray(local.expenses) && local.expenses.length > 0) {
       setExpenses(local.expenses);
@@ -270,7 +270,7 @@ const App = () => {
         // Forzar estado desde localStorage post-Supabase (garantiza sync en móvil/incógnito)
         const postSync = readLocal();
         if (Array.isArray(postSync.history) && postSync.history.length > 0) {
-          setHistory(postSync.history.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)));
+          setHistory(postSync.history.sort((a, b) => (b.year - a.year) || (b.month - a.month)));
         }
         if (Array.isArray(postSync.expenses) && postSync.expenses.length > 0) {
           setExpenses(postSync.expenses);
@@ -915,7 +915,8 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
     const nextExpenses = expenses.map(ex => ({ ...ex, installments: Math.max(1, ex.installments - 1) })).filter(ex => ex.installments > 0 || ex.responsibility === 'por_pagar');
 
     // 1. Actualización inmediata y local (Cache first)
-    setHistory(prev => [histRow, ...prev.filter(x => x.id !== id)]);
+    const newHistory = [histRow, ...history.filter(x => x.id !== id)].sort((a, b) => (b.year - a.year) || (b.month - a.month));
+    setHistory(newHistory);
     setExpenses(nextExpenses);
     setCepData(null);
     setPendingMetadata(null);
@@ -925,7 +926,7 @@ Devuelve EXCLUSIVAMENTE este JSON sin texto adicional:
     const currentStorage = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{"history":[]}');
     localStorage.setItem(STORAGE.DATA, JSON.stringify({
       ...currentStorage,
-      history: [histRow, ...(currentStorage.history || []).filter(h => h.id !== id)],
+      history: newHistory,
       expenses: nextExpenses
     }));
 
