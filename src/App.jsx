@@ -542,7 +542,7 @@ const App = () => {
       expenses: JSON.stringify([{ ...pendingMetadata, timestamp: Date.now() }]),
       timestamp: Date.now()
     };
-    supabase.from('history').upsert(metaRow).catch(e => console.warn('Auto-save nube fallido:', e.message));
+    supabase.from('history').upsert(metaRow).then(() => { }).catch(e => console.warn('Auto-save nube fallido:', e.message));
   }, [pendingMetadata]);
 
   // --- MOTOR DE IA UNIVERSAL TRI-FASE ---
