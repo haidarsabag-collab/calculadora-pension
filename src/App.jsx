@@ -3,7 +3,8 @@ import {
   Trash2, Calendar, CheckCircle2, Plus, Minus, BrainCircuit, Pencil, X,
   Image as ImageIcon, History, Printer, Eye, ShoppingBag, CreditCard,
   Lock, Unlock, Paperclip, Type, Shirt, FileImage, Wallet, Fingerprint,
-  Database, Save, Download, AlertCircle, RefreshCw, Zap, Layers, User
+  Database, Save, Download, AlertCircle, RefreshCw, Zap, Layers, User,
+  Images, FileText
 } from 'lucide-react';
 
 import { supabase } from './supabaseClient';
