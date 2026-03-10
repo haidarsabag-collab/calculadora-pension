@@ -445,75 +445,58 @@ const App = () => {
       {
         provider: 'GEMINI',
         key: keys.gemini,
-        models: ['gemini-1.5-flash', 'gemini-1.5-flash-latest', 'gemini-1.5-pro'],
+        models: ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'],
         call: async (key, model) => {
-          const versions = ['v1', 'v1beta'];
-          for (const v of versions) {
-            try {
-              console.log(`Intentando GEMINI ${v} con ${model}...`);
-              const url = `https://generativelanguage.googleapis.com/${v}/models/${model}:generateContent?key=${key}`;
-
-              const body = {
-                contents: [{
-                  parts: [
-                    { text: prompt + "\n\nIMPORTANTE: Responde EXCLUSIVAMENTE con el objeto JSON solicitado, sin texto antes ni después." },
-                    ...(imageBase64 ? [{ inlineData: { mimeType, data: imageBase64 } }] : [])
-                  ]
-                }]
-              };
-
-              // Avoid using picky JSON mode parameters, rely on prompt instructions for better compatibility
-              body.generationConfig = {
-                temperature: 0.1,
-                topP: 0.95,
-                topK: 40,
-                maxOutputTokens: 2048
-              };
-
-              const res = await fetch(url, { method: 'POST', body: JSON.stringify(body) });
-              const json = await res.json();
-              if (json.error) {
-                console.error(`Gemini Error (${v}):`, json.error);
-                if ((json.error.message.includes("not found") || json.error.status === "INVALID_ARGUMENT") && v === 'v1') continue;
-                throw new Error(json.error.message);
-              }
-              const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (!text) throw new Error("Respuesta vacía de Gemini");
-              return text;
-            } catch (e) {
-              if (v === 'v1') continue;
-              throw e;
-            }
-          }
+          // Gemini 2.0+ usa v1beta, 1.5 también funciona en v1beta
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`;
+          const body = {
+            contents: [{
+              parts: [
+                { text: prompt + "\n\nIMPORTANTE: Responde de forma clara y completa." },
+                ...(imageBase64 ? [{ inlineData: { mimeType, data: imageBase64 } }] : [])
+              ]
+            }],
+            generationConfig: { temperature: 0.2, maxOutputTokens: 4096 }
+          };
+          const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+          const json = await res.json();
+          if (json.error) throw new Error(`Gemini ${model}: ${json.error.message}`);
+          const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!text) throw new Error("Respuesta vacía de Gemini");
+          return text;
         }
       },
       {
         provider: 'GROQ',
         key: keys.groq,
-        models: ['llama-3.2-11b-vision-preview', 'llama-3.3-70b-versatile'],
+        // llama-3.3-70b-versatile: texto; llava-v1.5-7b-4096-preview: vision
+        models: imageBase64 ? ['meta-llama/llama-4-scout-17b-16e-instruct'] : ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'],
         call: async (key, model) => {
+          const body = {
+            model,
+            messages: [{
+              role: "user",
+              content: imageBase64
+                ? [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } }]
+                : prompt
+            }],
+            temperature: 0.2,
+            max_tokens: 4096
+          };
           const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
             method: "POST",
             headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
-            body: JSON.stringify({
-              model,
-              messages: [{
-                role: "user", content: [
-                  { type: "text", text: prompt },
-                  ...(imageBase64 ? [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] : [])
-                ]
-              }],
-              response_format: { type: "json_object" }
-            })
+            body: JSON.stringify(body)
           });
           const json = await res.json();
+          if (json.error) throw new Error(`Groq ${model}: ${json.error.message}`);
           return json.choices?.[0]?.message?.content;
         }
       },
       {
         provider: 'OPENROUTER',
         key: keys.openrouter,
-        models: ['google/gemini-flash-1.5', 'meta-llama/llama-3.2-11b-vision-instruct:free'],
+        models: ['google/gemini-2.0-flash-001', 'google/gemini-flash-1.5', 'meta-llama/llama-3.2-11b-vision-instruct:free'],
         call: async (key, model) => {
           const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
             method: "POST",
@@ -521,14 +504,15 @@ const App = () => {
             body: JSON.stringify({
               model,
               messages: [{
-                role: "user", content: [
-                  { type: "text", text: prompt },
-                  ...(imageBase64 ? [{ type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } }] : [])
-                ]
+                role: "user",
+                content: imageBase64
+                  ? [{ type: "text", text: prompt }, { type: "image_url", image_url: { url: `data:${mimeType};base64,${imageBase64}` } }]
+                  : prompt
               }]
             })
           });
           const json = await res.json();
+          if (json.error) throw new Error(`OpenRouter ${model}: ${json.error?.message}`);
           return json.choices?.[0]?.message?.content;
         }
       }
