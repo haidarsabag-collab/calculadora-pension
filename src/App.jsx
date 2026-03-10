@@ -119,12 +119,24 @@ const AnnualHistoryRow = ({ h, meses, fmt, STORAGE, supabase, setHistory, notify
 };
 
 const App = () => {
-  // --- HELPER: leer localStorage una sola vez de forma síncrona ---
+  // --- HELPER: leer localStorage con validación de integridad (Mejora #5) ---
   const readLocal = () => {
     try {
       const s = localStorage.getItem(STORAGE.DATA);
-      return s ? JSON.parse(s) : { history: [], expenses: [], manualBase: 5408, pendingMetadata: null };
-    } catch { return { history: [], expenses: [], manualBase: 5408, pendingMetadata: null }; }
+      if (!s) return { history: [], expenses: [], manualBase: 5408, pendingMetadata: null };
+      const parsed = JSON.parse(s);
+      // Validación de integridad: si la estructura está corrupta, devolver estado limpio
+      if (typeof parsed !== 'object' || parsed === null) throw new Error('Corrupted data');
+      return {
+        history: Array.isArray(parsed.history) ? parsed.history.filter(h => h && h.id && typeof h.month === 'number') : [],
+        expenses: Array.isArray(parsed.expenses) ? parsed.expenses.filter(e => e && e.id) : [],
+        manualBase: typeof parsed.manualBase === 'number' ? parsed.manualBase : 5408,
+        pendingMetadata: parsed.pendingMetadata || null
+      };
+    } catch (e) {
+      console.warn('LocalStorage corrupto, usando estado limpio:', e.message);
+      return { history: [], expenses: [], manualBase: 5408, pendingMetadata: null };
+    }
   };
 
   // --- HELPER: Descarga imperativa sin colapsar el Virtual DOM con Base64 masivos ---
@@ -199,11 +211,13 @@ const App = () => {
     }
     if (local.manualBase) setManualBase(local.manualBase);
 
-    // 2. Intentar enricher con Supabase (si falla, ya tenemos los datos locales)
+    // 2. Intentar enriquecer con Supabase en PARALELO (Mejora #4)
     try {
-      const { data: cloudHist, error: hErr } = await supabase.from('history').select('*');
+      const [{ data: cloudHist, error: hErr }, { data: cloudExp, error: eErr }] = await Promise.all([
+        supabase.from('history').select('*'),
+        supabase.from('expenses').select('*')
+      ]);
       if (hErr) throw hErr;
-      const { data: cloudExp, error: eErr } = await supabase.from('expenses').select('*');
       if (eErr) throw eErr;
 
       // Handle active unarchived metadata from the cloud
@@ -231,7 +245,7 @@ const App = () => {
       });
 
       if (merged.length > 0) {
-        merged.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+        merged.sort((a, b) => (b.year - a.year) || (b.month - a.month));
         setHistory(merged);
         localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...local, history: merged, expenses: cloudExp || local.expenses, pendingMetadata: local.pendingMetadata }));
       }
@@ -396,10 +410,31 @@ const App = () => {
     let metaIdx = list.findIndex(x => x.isMetadata);
     let metaObj = metaIdx >= 0 ? list[metaIdx] : { ...(pendingMetadata || {}), isMetadata: true };
 
+    // Mejora #3: Función de compresión agresiva (max 900px, calidad 0.65) para imágenes
+    const compressIfImage = (b64, fileType) => new Promise((res) => {
+      if (!fileType?.startsWith('image/') || b64.includes('application/pdf')) return res(b64);
+      const img = new Image();
+      img.onload = () => {
+        const maxDim = 900;
+        let w = img.width, h = img.height;
+        if (w > maxDim || h > maxDim) {
+          if (w > h) { h = Math.round(h * maxDim / w); w = maxDim; }
+          else { w = Math.round(w * maxDim / h); h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        res(canvas.toDataURL('image/jpeg', 0.65));
+      };
+      img.onerror = () => res(b64); // fallback: sin comprimir
+      img.src = b64;
+    });
+
     for (const file of files) {
-      const b64 = await new Promise((res, rej) => {
+      const rawB64 = await new Promise((res, rej) => {
         const r = new FileReader(); r.onloadend = () => res(r.result); r.onerror = rej; r.readAsDataURL(file);
       });
+      const b64 = await compressIfImage(rawB64, file.type);
 
       if (type === 'tickets') {
         metaObj.ticketsData = metaObj.ticketsData || [];
@@ -493,6 +528,23 @@ const App = () => {
 
   useEffect(() => { setAiReport(generatedNarrative); }, [generatedNarrative]);
 
+  // --- MEJORA #2: Auto-save silencioso de pendingMetadata (sin notificación al usuario) ---
+  useEffect(() => {
+    if (!pendingMetadata || !isInitialized.current) return;
+    // Guardar en localStorage inmediatamente
+    try {
+      const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+      localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, pendingMetadata }));
+    } catch (e) { console.warn('Auto-save local fallido:', e.message); }
+    // Subir a Supabase en background (sin bloquear la UI)
+    const metaRow = {
+      id: 'draft-meta', month, year, amount: 0,
+      expenses: JSON.stringify([{ ...pendingMetadata, timestamp: Date.now() }]),
+      timestamp: Date.now()
+    };
+    supabase.from('history').upsert(metaRow).catch(e => console.warn('Auto-save nube fallido:', e.message));
+  }, [pendingMetadata]);
+
   // --- MOTOR DE IA UNIVERSAL TRI-FASE ---
   const callAiFailover = async ({ prompt, imageBase64, mimeType }) => {
     const configs = [
@@ -571,17 +623,26 @@ const App = () => {
       }
     ];
 
+    // Mejora #1: Reintentos con backoff exponencial
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const MAX_RETRIES = 2;
     let lastError = "Falta configuración de llave o los motores no están disponibles.";
     for (const config of configs) {
       if (!config.key) continue;
       for (const model of config.models) {
-        try {
-          console.log(`Intentando ${config.provider} con ${model}...`);
-          const result = await config.call(config.key, model);
-          if (result) return { text: result, model: `${config.provider} (${model})` };
-        } catch (e) {
-          console.warn(`Falló ${model}:`, e);
-          lastError = e.message;
+        for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+          try {
+            if (attempt > 0) await sleep(attempt * 1000); // 1s, 2s de espera progresiva
+            console.log(`Intentando ${config.provider} con ${model} (intento ${attempt + 1})...`);
+            const result = await config.call(config.key, model);
+            if (result) return { text: result, model: `${config.provider} (${model})` };
+          } catch (e) {
+            lastError = e.message;
+            const isRateLimit = e.message?.includes('429') || e.message?.toLowerCase().includes('quota') || e.message?.toLowerCase().includes('rate');
+            if (!isRateLimit && attempt < MAX_RETRIES) continue; // reintenta si no es rate-limit
+            console.warn(`Falldó ${model} (intento ${attempt + 1}):`, e.message);
+            if (isRateLimit) break; // si hay rate-limit, no reintentes el mismo modelo
+          }
         }
       }
     }
