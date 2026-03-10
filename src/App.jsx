@@ -1231,12 +1231,56 @@ Escribe un análisis completo sobre los gastos del año y el balance general. Ge
               <Type className="w-4 h-4" />
               <h4 className="text-[10px] font-black uppercase tracking-widest">Resumen Desglosado </h4>
             </div>
-            <div className="flex items-center gap-2 bg-blue-50 px-3 py-1.5 rounded-full">
-              <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
-              <span className="text-[8px] font-black uppercase text-blue-600 tracking-widest">Inteligencia Activa</span>
+            <div className="flex items-center gap-2">
+              {viewingHistorical && (
+                <button onClick={async () => {
+                  // Regenerar narrativa desde los datos históricos almacenados
+                  notify("Regenerando resumen con IA...");
+                  try {
+                    const hist = viewingHistorical;
+                    let exps = [];
+                    try { exps = JSON.parse(hist.expenses || '[]'); } catch { }
+                    const prompt = `Redacta un resumen claro y formal del estado de cuenta de la pensón alimenticia de Kenney para ${meses[hist.month]} ${hist.year}.
+Base mensual: ${fmt(hist.baseUsed || 5408)}.
+Movimientos: ${JSON.stringify(exps.filter(e => !e.isMetadata).map(e => ({ concepto: e.name, impacto: e.monthlyImpact, pago: e.paidBy, responsabilidad: e.responsibility })))}
+Total depositado: ${fmt(hist.amount)}.
+Escribe el resumen en español, con el desglose de cada concepto y el total final. Incluye cómo se calculó cada ajuste. Sé claro, formal y concreto.`;
+                    const { text } = await callAiFailover({ prompt });
+                    setAiReport(text);
+                    // Guardar en historial
+                    const updatedHist = { ...hist, aiReport: text, timestamp: Date.now() };
+                    setHistory(prev => prev.map(h => h.id === hist.id ? updatedHist : h));
+                    const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+                    localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === hist.id ? updatedHist : h) }));
+                    await supabase.from('history').upsert(updatedHist);
+                    notify('✓ Resumen regenerado y guardado');
+                  } catch (err) {
+                    notify('Error con IA: ' + err.message, 'error');
+                  }
+                }} className="px-3 py-1.5 bg-indigo-100 text-indigo-700 rounded-full text-[8px] font-black uppercase hover:bg-indigo-200 transition-all flex items-center gap-1">
+                  <BrainCircuit className="w-3 h-3" /> Regenerar con IA
+                </button>
+              )}
+              <div className="flex items-center gap-2 bg-blue-50 px-3 py-1.5 rounded-full">
+                <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse"></div>
+                <span className="text-[8px] font-black uppercase text-blue-600 tracking-widest">Inteligencia Activa</span>
+              </div>
             </div>
           </div>
           <textarea ref={textareaRef} value={aiReport} onChange={e => setAiReport(e.target.value)} className="w-full min-h-[200px] p-4 bg-slate-50 rounded-2xl text-xs font-mono text-slate-700 leading-relaxed outline-none resize-none border border-slate-200 shadow-inner" />
+          {/* Botón Guardar Resumen cuando se está editando el texto de un mes histórico */}
+          {viewingHistorical && (
+            <button onClick={async () => {
+              const updatedHist = { ...viewingHistorical, aiReport, timestamp: Date.now() };
+              setHistory(prev => prev.map(h => h.id === viewingHistorical.id ? updatedHist : h));
+              const cur = JSON.parse(localStorage.getItem(STORAGE.DATA) || '{}');
+              localStorage.setItem(STORAGE.DATA, JSON.stringify({ ...cur, history: (cur.history || []).map(h => h.id === viewingHistorical.id ? updatedHist : h) }));
+              const { error } = await supabase.from('history').upsert(updatedHist);
+              notify(error ? 'Error: ' + error.message : '✓ Resumen guardado correctamente');
+            }} className="mt-3 w-full py-3 bg-emerald-600 text-white rounded-2xl text-[10px] font-black uppercase hover:bg-emerald-700 transition-all flex items-center justify-center gap-2 shadow-md">
+              <Save className="w-4 h-4" /> Guardar Resumen
+            </button>
+          )}
         </div>
 
         {/* LISTADO ÚNICO UNIFICADO */}
