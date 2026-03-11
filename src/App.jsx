@@ -237,11 +237,35 @@ const App = () => {
 
       merged = merged.filter(h => h.id !== 'draft-meta');
 
-      // Merge: preferir el que tenga timestamp más reciente
-      (local.history || []).filter(h => h.id !== 'draft-meta').forEach(localItem => {
+      // Merge: preferir el que tenga timestamp más reciente, pero si la nube tiene imágenes y el local no, ganar la nube
+      (local.history || []).filter(h => h && h.id !== 'draft-meta').forEach(localItem => {
         const idx = merged.findIndex(c => c.id === localItem.id);
-        if (idx === -1) merged.push(localItem);
-        else if ((localItem.timestamp || 0) > (merged[idx].timestamp || 0)) merged[idx] = localItem;
+        if (idx === -1) {
+          merged.push(localItem);
+        } else {
+          const cloudItem = merged[idx];
+          // Determinar si el ítem tiene imágenes
+          const cloudHasImages = (() => {
+            try {
+              const exp = JSON.parse(cloudItem.expenses || '[]');
+              const meta = exp.find(x => x.isMetadata);
+              return meta && (meta.cepData || (meta.ticketsData && meta.ticketsData.length > 0));
+            } catch { return false; }
+          })();
+          const localHasImages = (() => {
+            try {
+              const exp = JSON.parse(localItem.expenses || '[]');
+              const meta = exp.find(x => x.isMetadata);
+              return meta && (meta.cepData || (meta.ticketsData && meta.ticketsData.length > 0));
+            } catch { return false; }
+          })();
+          // Si la nube tiene imágenes y el local no, preferir nube. Si ambos tienen, preferir el más reciente.
+          if (cloudHasImages && !localHasImages) {
+            // no hacer nada: ya está el cloudItem en merged
+          } else if ((localItem.timestamp || 0) > (cloudItem.timestamp || 0)) {
+            merged[idx] = localItem;
+          }
+        }
       });
 
       if (merged.length > 0) {
@@ -281,17 +305,9 @@ const App = () => {
         await loadSupabaseData();
         isInitialized.current = true;
 
-        // Forzar estado desde localStorage post-Supabase (garantiza sync en móvil/incógnito)
-        const postSync = readLocal();
-        if (Array.isArray(postSync.history) && postSync.history.length > 0) {
-          setHistory(postSync.history.sort((a, b) => (b.year - a.year) || (b.month - a.month)));
-        }
-        if (Array.isArray(postSync.expenses) && postSync.expenses.length > 0) {
-          setExpenses(postSync.expenses);
-        }
-
         // Auto-navegar al mes siguiente al último mes con Reporte Final Consolidado
-        const finalized = (postSync.history || []).filter(h => h && h.aiReport && h.aiReport.trim().length > 10);
+        const syncedHistory = readLocal().history || [];
+        const finalized = syncedHistory.filter(h => h && h.aiReport && h.aiReport.trim().length > 10);
         if (finalized.length > 0) {
           const sorted = [...finalized].sort((a, b) => b.year !== a.year ? b.year - a.year : b.month - a.month);
           const last = sorted[0];
