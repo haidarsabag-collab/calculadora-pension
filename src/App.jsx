@@ -511,6 +511,7 @@ const App = () => {
     text += `==================================================\n\n`;
 
     text += `Nota: Se adjuntan comprobantes visuales al final de este reporte.\n\n`;
+    text += `FAVOR DE CONFIRMAR DE RECIBIDO.\n\n`;
     text += `Saludos, Haidar Sabag.`;
     return text;
   }, [currentBase, activeAjustes, viewingHistorical, isEditingHistorical, totalFinal, month, year]);
