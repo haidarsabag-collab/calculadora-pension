@@ -474,8 +474,7 @@ const App = () => {
     const suman = list.filter(a => a && a.monthlyImpact > 0);
     const restan = list.filter(a => a && a.monthlyImpact < 0);
 
-    let text = `ESTADO DE CUENTA - PENSIÓN ALIMENTICIA\n`;
-    text += `Beneficiario: Hadi Sabag | Proveedor: Haidar Sabag | Receptora: Kenny de Aquino\n`;
+    let text = `ESTADO DE CUENTA - PENSIÓN PARA HADI SABAG\n`;
     text += `Periodo: ${meses[month] || "MES"} ${year}\n`;
     text += `==================================================\n\n`;
 
